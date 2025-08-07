@@ -438,7 +438,6 @@ class OptimizedPDFPipeline:
         """使用分批次异步处理模式处理PDF文件"""
         import asyncio
         from concurrent.futures import ThreadPoolExecutor
-        from mineru.cli.common import read_fn
         
         success_count = 0
         processed_data = []
@@ -748,12 +747,12 @@ class OptimizedPDFPipeline:
                  except Exception as parse_error:
                      parse_time = time.time() - parse_start_time
                      logger.error(f"批次 {batch_idx + 1}: do_parse内部错误 (耗时 {self.format_time(parse_time)}): {parse_error}")
-                     logger.debug(f"批次 {batch_idx + 1}: do_parse错误详情: {traceback.format_exc()}")
+                     logger.error(f"批次 {batch_idx + 1}: do_parse错误详情: {traceback.format_exc()}")
                      raise parse_error
                 
             except Exception as e:
                 logger.error(f"批次 {batch_idx + 1}: do_parse调用失败: {e}")
-                logger.debug(traceback.format_exc())
+                logger.error(traceback.format_exc())
                 return False, []
             
             process_time = time.time() - process_start_time
@@ -969,7 +968,7 @@ class OptimizedPDFPipeline:
                                             # 确保基本字段存在
                                             metadata.setdefault("source_file", pdf_name)
                                             metadata.setdefault("lang", "zh")
-                                            metadata.setdefault("type", "文档")
+                                            metadata.setdefault("type", "书籍")
                                             metadata.setdefault("processing_date", datetime.now().strftime("%Y-%m-%d"))
                                     except Exception as e:
                                         logger.warning(f"读取大模型元数据失败 {extracted_metadata_file}: {e}")
@@ -979,26 +978,20 @@ class OptimizedPDFPipeline:
                                 if not metadata:
                                     logger.debug(f"使用基本元数据: {pdf_name}")
                                     # 尝试从middle.json获取基本的处理信息（非文件信息）
-                                    basic_info = {}
                                     if middle_json_file.exists():
                                         try:
                                             with open(middle_json_file, 'r', encoding='utf-8') as f:
                                                 middle_data = json.load(f)
                                                 # 只提取处理相关信息，不依赖文件信息
-                                                basic_info = {
-                                                    "backend": middle_data.get("_backend", "unknown"),
-                                                    "version": middle_data.get("_version_name", "unknown"),
-                                                    "page_count": len(middle_data.get("pdf_info", []))
-                                                }
+
                                         except Exception as e:
                                             logger.warning(f"读取middle.json基本信息失败: {e}")
                                     
                                     metadata = {
                                         "source_file": pdf_name,
                                         "lang": "zh",
-                                        "type": "文档",
+                                        "type": "书籍",
                                         "processing_date": datetime.now().strftime("%Y-%m-%d"),
-                                        **basic_info  # 合并基本处理信息
                                     }
                                 
                                 # 如果内容不为空，则添加到处理数据中
@@ -1012,10 +1005,10 @@ class OptimizedPDFPipeline:
                                 logger.error(f"读取{md_file}失败: {e}")
                                 continue
             
-            # 添加当前批次的数据（如果有）
-            if processed_data:
-                logger.info(f"添加当前批次数据: {len(processed_data)} 条记录")
-                all_processed_data.extend(processed_data)
+            # # 添加当前批次的数据（如果有）
+            # if processed_data:
+            #     logger.info(f"添加当前批次数据: {len(processed_data)} 条记录")
+            #     all_processed_data.extend(processed_data)
             
             logger.info(f"总共收集到 {len(all_processed_data)} 条记录")
             
@@ -1035,11 +1028,8 @@ class OptimizedPDFPipeline:
                             "data_info": {
                                 "lang": item["metadata"].get("lang", "zh"),
                                 "source": item["metadata"].get("source_file", item["metadata"].get("publisher", "")),
-                                "type": item["metadata"].get("type", "文档"),
+                                "type": item["metadata"].get("type", "书籍"),
                                 "author": item["metadata"].get("author", ""),
-                                "backend": item["metadata"].get("backend", ""),
-                                "version": item["metadata"].get("version", ""),
-                                "page_count": item["metadata"].get("page_count", 0),
                                 "processing_date": item["metadata"].get("processing_date", datetime.now().strftime("%Y-%m-%d"))
                             },
                             "knowledge_info": {
@@ -1107,7 +1097,7 @@ class OptimizedPDFPipeline:
             return False
         except Exception as e:
             logger.error(f"流水线执行失败: {e}")
-            logger.debug(traceback.format_exc())
+            logger.error(traceback.format_exc())
             return False
 
 

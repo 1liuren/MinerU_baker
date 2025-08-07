@@ -205,6 +205,16 @@ def parse_doc(
             file_name_list.append(file_name)
             pdf_bytes_list.append(pdf_bytes)
             lang_list.append(lang)
+        # 打印调用参数
+        logger.info(f"调用参数如下:")
+        logger.info(f"output_dir: {output_dir}")
+        logger.info(f"file_name_list: {file_name_list}")
+        logger.info(f"lang_list: {lang_list}")
+        logger.info(f"backend: {backend}")
+        logger.info(f"method: {method}")
+        logger.info(f"server_url: {server_url}")
+        logger.info(f"start_page_id: {start_page_id}")
+        logger.info(f"end_page_id: {end_page_id}")
         do_parse(
             output_dir=output_dir,
             pdf_file_names=file_name_list,
@@ -237,9 +247,9 @@ if __name__ == '__main__':
     # os.environ['MINERU_MODEL_SOURCE'] = "modelscope"
 
     """Use pipeline mode if your environment does not support VLM"""
-    parse_doc(doc_path_list, output_dir, backend="pipeline")
+    # parse_doc(doc_path_list, output_dir, backend="pipeline")
 
     """To enable VLM mode, change the backend to 'vlm-xxx'"""
     # parse_doc(doc_path_list, output_dir, backend="vlm-transformers")  # more general.
     # parse_doc(doc_path_list, output_dir, backend="vlm-sglang-engine")  # faster(engine).
-    # parse_doc(doc_path_list, output_dir, backend="vlm-sglang-client", server_url="http://127.0.0.1:30000")  # faster(client).
+    parse_doc(doc_path_list, output_dir, backend="vlm-sglang-client", server_url="http://10.10.50.50:30000")  # faster(client).
