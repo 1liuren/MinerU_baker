@@ -5,6 +5,35 @@ from loguru import logger
 import asyncio
 import aiohttp
 
+def mineru_parse_sync(file_path: str, server_url: str = 'http://127.0.0.1:8000/predict', **options):
+    """同步调用MinerU服务端预测接口。
+
+    Args:
+        file_path: 待处理文件路径
+        server_url: 服务端 /predict 接口URL
+        **options: 透传给服务端的参数，包含 backend/method/lang/formula_enable/table_enable/start_page_id/end_page_id/server_url/output_dir 等
+
+    Returns:
+        dict: 成功返回 { 'output_dir': str }，失败返回 { 'error': str }
+    """
+    try:
+        with open(file_path, 'rb') as f:
+            file_b64 = base64.b64encode(f.read()).decode('utf-8')
+
+        payload = {
+            'file': file_b64,
+            'options': options
+        }
+
+        resp = requests.post(server_url, json=payload, timeout=300)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            return {'error': resp.text}
+    except Exception as e:
+        logger.error(f"同步调用失败 {file_path}: {e}")
+        return {'error': str(e)}
+
 async def mineru_parse_async(session, file_path, server_url='http://10.10.50.52:8111/predict', **options):
     """
     Asynchronous version of the parse function.

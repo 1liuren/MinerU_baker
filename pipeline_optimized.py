@@ -205,8 +205,7 @@ class OptimizedPDFPipeline:
     def __init__(self, input_dir: str, output_dir: str, max_workers: int = 4,
                  backend: str = "vlm-sglang-client", server_url: str = None,
                  lang: str = "ch", api_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                 batch_size: int = 100, concurrent_batches: int = 4,
-                 max_files_per_call: int = 400):
+                 batch_size: int = 100, concurrent_batches: int = 4):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.max_workers = max_workers
@@ -216,7 +215,6 @@ class OptimizedPDFPipeline:
         self.api_url = api_url
         self.batch_size = batch_size
         self.concurrent_batches = concurrent_batches
-        self.max_files_per_call = max_files_per_call
 
         
         # 创建输出目录结构
@@ -466,11 +464,6 @@ class OptimizedPDFPipeline:
         logger.info(f"需要处理 {total_files} 个文件（跳过 {len(pdf_files) - total_files} 个已处理）")
         logger.info(f"批次配置: 每批次 {self.batch_size} 个文件，同时处理 {self.concurrent_batches} 个批次")
         
-        # 如果文件数量超过max_files_per_call，则需要分批次处理
-        if total_files > self.max_files_per_call:
-            logger.warning(f"文件数量 ({total_files}) 超过单次调用限制 ({self.max_files_per_call})，将分批次处理")
-            return self._process_large_batch(files_to_process)
-        
         # 将文件分成批次
         batches = []
         for i in range(0, total_files, self.batch_size):
@@ -497,67 +490,9 @@ class OptimizedPDFPipeline:
             logger.debug(traceback.format_exc())
             return False, []
     
-    def _process_large_batch(self, files_to_process: List[Path]) -> Tuple[bool, List[Dict]]:
-        """处理大批量文件，分多次调用"""
-        total_files = len(files_to_process)
-        all_processed_data = []
-        total_success = 0
-        
-        # 按max_files_per_call分组
-        call_groups = []
-        for i in range(0, total_files, self.max_files_per_call):
-            group = files_to_process[i:i + self.max_files_per_call]
-            call_groups.append(group)
-        
-        logger.info(f"将分 {len(call_groups)} 次调用处理")
-        
-        with tqdm(call_groups, desc="处理调用组", unit="组") as pbar:
-            for group_idx, group_files in enumerate(pbar, 1):
-                pbar.set_description(f"处理第 {group_idx}/{len(call_groups)} 组")
-                logger.info(f"第 {group_idx}/{len(call_groups)} 次调用，处理 {len(group_files)} 个文件")
-                
-                # 直接调用批次处理逻辑，避免递归
-                success, data = self._process_group_directly(group_files)
-                
-                if success:
-                    all_processed_data.extend(data)
-                    total_success += len(data)
-                
-                logger.success(f"第 {group_idx} 次调用完成，成功处理 {len(data)} 个文件")
-        
-        logger.success(f"大批量处理完成，总共成功处理 {total_success}/{total_files} 个文件")
-        return total_success > 0, all_processed_data
+    # 移除 _process_large_batch 相关逻辑（不再限制单次调用文件数）
     
-    def _process_group_directly(self, group_files: List[Path]) -> Tuple[bool, List[Dict]]:
-        """直接处理一组文件，不进行大批量检查"""
-        import asyncio
-        from concurrent.futures import ThreadPoolExecutor
-        
-        # 将文件分成批次
-        batches = []
-        for i in range(0, len(group_files), self.batch_size):
-            batch = group_files[i:i + self.batch_size]
-            batches.append(batch)
-        
-        logger.info(f"当前组分为 {len(batches)} 个批次")
-        
-        try:
-            # 使用异步处理多个批次
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            try:
-                success, data = loop.run_until_complete(
-                    self._process_batches_async(batches)
-                )
-                return success, data
-            finally:
-                loop.close()
-                
-        except Exception as e:
-            logger.error(f"组处理失败: {e}")
-            logger.debug(traceback.format_exc())
-            return False, []
+    # 移除 _process_group_directly（不再按调用组分层）
     
     async def _process_batches_async(self, batches: List[List[Path]]) -> Tuple[bool, List[Dict]]:
         """异步处理多个批次"""
@@ -707,48 +642,70 @@ class OptimizedPDFPipeline:
             # 记录处理开始时间
             process_start_time = time.time()
             
-            # 调用do_parse进行批量处理
+            # 调用HTTP服务进行批量处理（异步并发）
             try:
-                 logger.info(f"批次 {batch_idx + 1}: 调用do_parse处理 {len(pdf_bytes_list)} 个文件")
-                 logger.info(f"批次 {batch_idx + 1}: 使用后端 {self.backend}，输出目录 {temp_output_dir}")
-                 
-                 # 调试信息：检查PDF文件
-                 total_bytes = sum(len(pdf_bytes) for pdf_bytes in pdf_bytes_list)
-                 logger.debug(f"批次 {batch_idx + 1}: 准备处理 {len(file_name_list)} 个文件，总大小: {total_bytes / 1024 / 1024:.2f} MB")
-                 for i, (file_name, pdf_bytes) in enumerate(zip(file_name_list, pdf_bytes_list)):
-                     logger.debug(f"批次 {batch_idx + 1}: 文件 {i+1}/{len(file_name_list)} - {file_name}, 大小: {len(pdf_bytes) / 1024:.2f} KB")
-                 
-                 # do_parse调用阶段计时
+                 logger.info(f"批次 {batch_idx + 1}: 通过HTTP服务(异步)处理 {len(valid_files)} 个文件")
+                 logger.info(f"批次 {batch_idx + 1}: 使用后端 {self.backend}，目标输出目录 {self.results_dir}")
+
+                 # 动态导入异步客户端
+                 import importlib.util as _importlib_util
+                 client_path = Path(__file__).parent / "projects" / "multi_gpu_v2" / "client.py"
+                 spec_client = _importlib_util.spec_from_file_location("mclient", client_path)
+                 mclient = _importlib_util.module_from_spec(spec_client)
+                 spec_client.loader.exec_module(mclient)
+                 mineru_parse_async = getattr(mclient, "mineru_parse_async")
+
+                 # 服务端/predict地址：优先环境变量MINERU_SERVICE_URL，否则默认本机
+                 service_url = os.getenv("MINERU_SERVICE_URL", "http://10.10.50.52:8111/predict")
+
+                 import asyncio
+                 import aiohttp
+
+                 async def _run_async_calls():
+                     # 每批次内部的HTTP并发，使用 max_workers 控制
+                     concurrency = max(1, int(self.max_workers))
+                     semaphore = asyncio.Semaphore(concurrency)
+
+                     async with aiohttp.ClientSession() as session:
+                         async def _one(idx, pdf_path):
+                             opts = {
+                                 'backend': self.backend,
+                                 'method': 'auto',
+                                 'lang': lang_list[idx],
+                                 'formula_enable': True,
+                                 'table_enable': True,
+                                 'start_page_id': 0,
+                                 'end_page_id': None,
+                                 'server_url': self.server_url,
+                                 # 指定服务端输出根目录为批次临时目录
+                                 'output_dir': str(temp_output_dir),
+                             }
+                             async with semaphore:
+                                 return await mineru_parse_async(session, str(pdf_path), server_url=service_url, **opts)
+
+                         tasks = [
+                             _one(idx, pdf_file) for idx, pdf_file in enumerate(valid_files)
+                         ]
+                         return await asyncio.gather(*tasks, return_exceptions=True)
+
                  parse_start_time = time.time()
-                 logger.info(f"批次 {batch_idx + 1}: 开始调用do_parse处理 {len(pdf_bytes_list)} 个文件...")
-                 logger.debug(f"批次 {batch_idx + 1}: 调用参数: 输出目录={str(temp_output_dir)}, PDF文件数={str(file_name_list)}, 后端={self.backend}, 服务器URL={self.server_url}, 语言={lang_list[0] if lang_list else 'default'}")
-                 
+                 # 独立事件循环，避免与外层冲突
+                 loop = asyncio.new_event_loop()
                  try:
-                     do_parse(
-                         output_dir=str(temp_output_dir),
-                         pdf_file_names=file_name_list,
-                         pdf_bytes_list=pdf_bytes_list,
-                         p_lang_list=lang_list,
-                         backend=self.backend,
-                         parse_method="auto",
-                         formula_enable=True,
-                         table_enable=True,
-                         server_url=self.server_url,
-                         f_draw_layout_bbox=False,
-                         f_draw_span_bbox=False,
-                         f_dump_md=True,
-                         f_dump_middle_json=True,
-                         f_dump_model_output=False,
-                         f_dump_orig_pdf=False,
-                         f_dump_content_list=False
-                     )
-                     parse_time = time.time() - parse_start_time
-                     logger.success(f"批次 {batch_idx + 1}: do_parse调用完成，耗时 {self.format_time(parse_time)}")
-                 except Exception as parse_error:
-                     parse_time = time.time() - parse_start_time
-                     logger.error(f"批次 {batch_idx + 1}: do_parse内部错误 (耗时 {self.format_time(parse_time)}): {parse_error}")
-                     logger.error(f"批次 {batch_idx + 1}: do_parse错误详情: {traceback.format_exc()}")
-                     raise parse_error
+                     asyncio.set_event_loop(loop)
+                     results = loop.run_until_complete(_run_async_calls())
+                 finally:
+                     loop.close()
+
+                 # 检查错误
+                 for r in results:
+                     if isinstance(r, Exception):
+                         raise r
+                     if isinstance(r, dict) and 'error' in r:
+                         raise RuntimeError(r['error'])
+
+                 parse_time = time.time() - parse_start_time
+                 logger.success(f"批次 {batch_idx + 1}: 服务端并发调用完成，耗时 {self.format_time(parse_time)}")
                 
             except Exception as e:
                 logger.error(f"批次 {batch_idx + 1}: do_parse调用失败: {e}")
@@ -1156,8 +1113,7 @@ MinerU集成版特性:
                        help="每个批次处理的PDF文件数量 (默认: 100)")
     parser.add_argument("--concurrent-batches", type=int, default=1,
                        help="同时处理的批次数量 (默认: 4)")
-    parser.add_argument("--max-files-per-call", type=int, default=400,
-                       help="单次调用最大文件数量，超过则分批处理 (默认: 400)")
+    # 移除 --max-files-per-call 参数
     parser.add_argument("--log-level", default="INFO",
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                        help="日志级别 (默认: INFO)")
@@ -1192,8 +1148,7 @@ MinerU集成版特性:
             lang=args.lang,
             api_url=args.api_url,
             batch_size=args.batch_size,
-            concurrent_batches=args.concurrent_batches,
-            max_files_per_call=args.max_files_per_call
+            concurrent_batches=args.concurrent_batches
         )
         
         success = pipeline.run_pipeline()
