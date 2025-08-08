@@ -11,7 +11,19 @@ import sys
 import logging
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+# 使用loguru替代标准logging，确保日志正常输出
+try:
+    from loguru import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+    # 如果没有配置handler，添加一个基本的控制台输出
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
 
 def force_cleanup_models():
     """
@@ -110,8 +122,13 @@ def monitor_gpu_memory():
     """
     try:
         import torch
+        logger.info(f"PyTorch版本: {torch.__version__}")
+        
         if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
+            device_count = torch.cuda.device_count()
+            logger.info(f"检测到 {device_count} 个CUDA设备")
+            
+            for i in range(device_count):
                 try:
                     with torch.cuda.device(i):
                         allocated = torch.cuda.memory_allocated(i) / 1024**3  # GB
@@ -124,12 +141,21 @@ def monitor_gpu_memory():
                         usage_rate = cached / total
                         if usage_rate > 0.9:
                             logger.warning(f"GPU {i} 显存使用率过高: {usage_rate:.1%}")
+                        else:
+                            logger.info(f"GPU {i} 显存使用率: {usage_rate:.1%}")
                             
                 except Exception as e:
                     logger.warning(f"监控GPU {i} 失败: {e}")
+        else:
+            logger.warning("CUDA不可用，当前PyTorch版本不支持GPU或未安装CUDA版本的PyTorch")
+            logger.info("如果需要GPU支持，请安装CUDA版本的PyTorch")
                     
+    except ImportError as e:
+        logger.error(f"导入PyTorch失败: {e}")
     except Exception as e:
         logger.warning(f"GPU内存监控失败: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
 
 def setup_memory_monitoring():
     """
