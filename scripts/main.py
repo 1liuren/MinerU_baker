@@ -9,17 +9,22 @@ import sys
 from pathlib import Path
 from loguru import logger
 
+# 添加当前目录到Python路径
+sys.path.insert(0, str(Path(__file__).parent))
+
 # 支持直接执行和模块导入两种方式
 try:
-    from .config import configure_logging
-    from .pdf_pipeline import OptimizedPDFPipeline
+    from config import configure_logging
+    from pdf_pipeline import OptimizedPDFPipeline
 except ImportError:
-    # 直接执行时使用绝对导入
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    from scripts.config import configure_logging
-    from scripts.pdf_pipeline import OptimizedPDFPipeline
+    try:
+        from .config import configure_logging
+        from .pdf_pipeline import OptimizedPDFPipeline
+    except ImportError:
+        # 最后尝试从scripts包导入
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from scripts.config import configure_logging
+        from scripts.pdf_pipeline import OptimizedPDFPipeline
 
 
 def parse_args():
@@ -231,8 +236,16 @@ def main():
             import os
             import subprocess
             import json
-            from .health_monitor import HealthMonitor
-            from .health_config import get_health_config
+            try:
+                from health_monitor import HealthMonitor
+                from health_config import get_health_config
+            except ImportError:
+                try:
+                    from .health_monitor import HealthMonitor
+                    from .health_config import get_health_config
+                except ImportError:
+                    from scripts.health_monitor import HealthMonitor
+                    from scripts.health_config import get_health_config
 
             gpu_list = [int(x) for x in args.gpus.split(',') if x.strip() != ""]
             shard_count = len(gpu_list)
@@ -352,8 +365,19 @@ def main():
                     logger.warning(f"全局显存清理失败: {e}")
                     
                 # 调用专用内存清理
-                from .memory_utils import cleanup_process_memory
-                cleanup_process_memory()
+                try:
+                    from memory_utils import cleanup_process_memory
+                    cleanup_process_memory()
+                except ImportError:
+                    try:
+                        from .memory_utils import cleanup_process_memory
+                        cleanup_process_memory()
+                    except ImportError:
+                        try:
+                            from scripts.memory_utils import cleanup_process_memory
+                            cleanup_process_memory()
+                        except ImportError:
+                            logger.warning("无法导入内存清理工具，跳过专用内存清理")
                     
             except Exception as e:
                 logger.warning(f"全局清理失败: {e}")
