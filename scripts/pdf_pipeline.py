@@ -26,6 +26,12 @@ from .status_manager import ProcessingStatus
 from .html_converter import HTMLToMarkdownConverter
 from .utils import format_time, find_files, clean_markdown_text, extract_metadata_with_llm
 
+# 导入内存管理工具
+try:
+    from .memory_utils import cleanup_process_memory, monitor_gpu_memory, setup_memory_monitoring
+except ImportError:
+    from memory_utils import cleanup_process_memory, monitor_gpu_memory, setup_memory_monitoring
+
 
 def process_batch_worker(batch_data):
     """多进程工作函数，处理单个批次"""
@@ -40,6 +46,19 @@ def process_batch_worker(batch_data):
     from loguru import logger
     
     batch_idx, batch_files, config = batch_data
+    
+    # 设置进程级内存监控
+    try:
+        setup_memory_monitoring()
+    except Exception as e:
+        logger.warning(f"进程 {os.getpid()}: 内存监控设置失败: {e}")
+    
+    # 监控初始GPU状态
+    logger.info(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 开始前GPU状态:")
+    try:
+        monitor_gpu_memory()
+    except Exception as e:
+        logger.warning(f"进程 {os.getpid()}: GPU状态监控失败: {e}")
     
     try:
         # 配置子进程的日志 - 确保子进程有正确的日志配置
@@ -258,10 +277,44 @@ def process_batch_worker(batch_data):
             del valid_files
         except Exception:
             pass
+        
+        # 强制清理显存和模型缓存
         try:
-            clean_memory(get_device())
-        except Exception:
-            pass
+            import gc
+            import torch
+            from mineru.utils.config_reader import get_device
+            from mineru.utils.model_utils import clean_memory
+            
+            # 强制垃圾回收
+            gc.collect()
+            
+            # 清理显存
+            device = get_device()
+            clean_memory(device)
+            
+            # 如果是CUDA设备，进行额外的显存清理
+            if torch.cuda.is_available() and str(device).startswith('cuda'):
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+                # 强制同步，确保所有操作完成
+                torch.cuda.synchronize()
+                
+            logger.info(f"进程 {os.getpid()}: 显存清理完成")
+        except Exception as e:
+            logger.warning(f"进程 {os.getpid()}: 显存清理失败: {e}")
+        
+        # 使用专用的内存清理工具
+        try:
+            cleanup_process_memory()
+        except Exception as e:
+            logger.warning(f"进程 {os.getpid()}: 专用内存清理失败: {e}")
+        
+        # 监控清理后的GPU状态
+        logger.info(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 完成后GPU状态:")
+        try:
+            monitor_gpu_memory()
+        except Exception as e:
+            logger.warning(f"进程 {os.getpid()}: GPU状态监控失败: {e}")
         
         logger.success(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 处理完成，成功处理 {len(processed_data)} 个文件")
         return True, processed_data, parse_time  # 返回真正的批次处理时间
@@ -269,6 +322,33 @@ def process_batch_worker(batch_data):
     except Exception as e:
         logger.error(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 处理失败: {e}")
         logger.error(traceback.format_exc())
+        
+        # 异常情况下也要进行显存清理
+        try:
+            import gc
+            import torch
+            from mineru.utils.config_reader import get_device
+            from mineru.utils.model_utils import clean_memory
+            
+            gc.collect()
+            device = get_device()
+            clean_memory(device)
+            
+            if torch.cuda.is_available() and str(device).startswith('cuda'):
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+                torch.cuda.synchronize()
+                
+            logger.info(f"进程 {os.getpid()}: 异常后显存清理完成")
+        except Exception as cleanup_e:
+            logger.warning(f"进程 {os.getpid()}: 异常后显存清理失败: {cleanup_e}")
+        
+        # 异常情况下也使用专用的内存清理工具
+        try:
+            cleanup_process_memory()
+        except Exception as e:
+            logger.warning(f"进程 {os.getpid()}: 异常后专用内存清理失败: {e}")
+            
         # 如果parse_time未定义，使用0作为默认值
         parse_time = locals().get('parse_time', 0)
         return False, [], parse_time

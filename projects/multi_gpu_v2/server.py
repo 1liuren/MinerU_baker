@@ -48,7 +48,6 @@ class MinerUAPI(ls.LitAPI):
             temp_file = Path(temp.name)
         return {
             'input_path': str(temp_file),
-            'output_dir': options.get('output_dir', None),
             'backend': options.get('backend', 'pipeline'),
             'method': options.get('method', 'auto'),
             'lang': options.get('lang', 'ch'),
@@ -62,9 +61,7 @@ class MinerUAPI(ls.LitAPI):
     def predict(self, inputs):
         """Call MinerU's do_parse - same as CLI"""
         input_path = inputs['input_path']
-        # 允许调用方参数化输出根目录
-        output_root = Path(inputs.get('output_dir') or self.output_dir)
-        output_dir = output_root / Path(input_path).stem
+        output_dir = Path(self.output_dir) / Path(input_path).stem
         
         try:
             os.makedirs(output_dir, exist_ok=True)

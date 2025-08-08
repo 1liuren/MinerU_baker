@@ -676,9 +676,10 @@ class OptimizedPDFPipeline:
                                  'table_enable': True,
                                  'start_page_id': 0,
                                  'end_page_id': None,
-                                 'server_url': self.server_url,
+                                 # VLM后端的URL使用 vlm_server_url，避免与HTTP请求参数 server_url 冲突
+                                 'vlm_server_url': None,
                                  # 指定服务端输出根目录为批次临时目录
-                                 'output_dir': str(temp_output_dir),
+                                 'output_dir': str(self.results_dir),
                              }
                              async with semaphore:
                                  return await mineru_parse_async(session, str(pdf_path), server_url=service_url, **opts)

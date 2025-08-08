@@ -237,17 +237,70 @@ def main():
                 logger.info(f"启动子进程: GPU={gpu_id}, shard={shard_index+1}/{shard_count}")
                 procs.append(subprocess.Popen(cmd, env=env))
 
-            # 等待所有子进程结束
-            exit_codes = [p.wait() for p in procs]
+            # 等待所有子进程结束，并监控进程状态
+            import psutil
+            import signal
+            
+            exit_codes = []
+            for i, proc in enumerate(procs):
+                try:
+                    # 等待进程结束，设置超时
+                    exit_code = proc.wait(timeout=3600)  # 1小时超时
+                    exit_codes.append(exit_code)
+                    logger.info(f"子进程 {i+1} 正常结束，退出码: {exit_code}")
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"子进程 {i+1} 超时，强制终止")
+                    proc.kill()
+                    exit_codes.append(-1)
+                except Exception as e:
+                    logger.error(f"子进程 {i+1} 异常: {e}")
+                    exit_codes.append(-1)
+                    
+                # 确保子进程完全清理
+                try:
+                    if proc.poll() is None:  # 进程仍在运行
+                        proc.terminate()
+                        proc.wait(timeout=10)
+                        if proc.poll() is None:
+                            proc.kill()
+                            proc.wait()
+                except Exception as e:
+                    logger.warning(f"清理子进程 {i+1} 失败: {e}")
+            
             success = all(code == 0 for code in exit_codes)
+            
             # 进程收尾后做一次全局清理
             try:
-                import os
+                import gc
+                import torch
                 from mineru.utils.config_reader import get_device
                 from mineru.utils.model_utils import clean_memory
-                clean_memory(get_device())
-            except Exception:
-                pass
+                
+                # 强制垃圾回收
+                gc.collect()
+                
+                # 清理所有可用GPU的显存
+                if torch.cuda.is_available():
+                    for gpu_id in range(torch.cuda.device_count()):
+                        try:
+                            with torch.cuda.device(gpu_id):
+                                torch.cuda.empty_cache()
+                                torch.cuda.ipc_collect()
+                                torch.cuda.synchronize()
+                            logger.info(f"GPU {gpu_id} 显存清理完成")
+                        except Exception as e:
+                            logger.warning(f"GPU {gpu_id} 显存清理失败: {e}")
+                
+                # 通用设备清理
+                try:
+                    device = get_device()
+                    clean_memory(device)
+                    logger.info("全局显存清理完成")
+                except Exception as e:
+                    logger.warning(f"全局显存清理失败: {e}")
+                    
+            except Exception as e:
+                logger.warning(f"全局清理失败: {e}")
         else:
             # 单进程（可搭配 CUDA_VISIBLE_DEVICES 外部设置）
             pipeline = OptimizedPDFPipeline(
