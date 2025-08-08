@@ -240,6 +240,14 @@ def main():
             # 等待所有子进程结束
             exit_codes = [p.wait() for p in procs]
             success = all(code == 0 for code in exit_codes)
+            # 进程收尾后做一次全局清理
+            try:
+                import os
+                from mineru.utils.config_reader import get_device
+                from mineru.utils.model_utils import clean_memory
+                clean_memory(get_device())
+            except Exception:
+                pass
         else:
             # 单进程（可搭配 CUDA_VISIBLE_DEVICES 外部设置）
             pipeline = OptimizedPDFPipeline(

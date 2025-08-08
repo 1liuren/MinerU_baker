@@ -58,6 +58,8 @@ def process_batch_worker(batch_data):
         
         # 导入必要的模块
         from mineru.cli.common import read_fn
+        from mineru.utils.config_reader import get_device
+        from mineru.utils.model_utils import clean_memory
         from .utils import format_time
         
         logger.info(f"进程 {os.getpid()}: 开始处理批次 {batch_idx + 1} ({len(batch_files)} 个文件)")
@@ -129,6 +131,12 @@ def process_batch_worker(batch_data):
         )
         parse_time = time.time() - parse_start_time
         logger.success(f"进程 {os.getpid()}: 批次 {batch_idx + 1} do_parse调用完成，耗时 {format_time(parse_time)}")
+
+        # 尝试在每个批次结束后主动清理一次显存/内存，缓解长期运行积累
+        try:
+            clean_memory(get_device())
+        except Exception:
+            pass
         
         # 收集处理结果 - 分阶段进行，先收集文件，再并行处理元数据
         file_contents = []
@@ -242,6 +250,18 @@ def process_batch_worker(batch_data):
             shutil.rmtree(temp_output_dir)
         except Exception as e:
             logger.warning(f"进程 {os.getpid()}: 清理临时目录失败: {e}")
+
+        # 二次清理：释放本地引用并触发gc/显存清理
+        try:
+            del pdf_bytes_list
+            del file_contents
+            del valid_files
+        except Exception:
+            pass
+        try:
+            clean_memory(get_device())
+        except Exception:
+            pass
         
         logger.success(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 处理完成，成功处理 {len(processed_data)} 个文件")
         return True, processed_data, parse_time  # 返回真正的批次处理时间
