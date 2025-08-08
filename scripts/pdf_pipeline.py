@@ -21,16 +21,39 @@ from typing import Dict, List, Tuple, Optional
 from tqdm import tqdm
 from loguru import logger
 
-from .config import configure_logging, OpenAI, BookMetadata
-from .status_manager import ProcessingStatus
-from .html_converter import HTMLToMarkdownConverter
-from .utils import format_time, find_files, clean_markdown_text, extract_metadata_with_llm
+# 添加当前目录到Python路径
+sys.path.insert(0, str(Path(__file__).parent))
+
+try:
+    from config import configure_logging, OpenAI, BookMetadata
+except ImportError:
+    from .config import configure_logging, OpenAI, BookMetadata
+
+try:
+    from status_manager import ProcessingStatus
+except ImportError:
+    from .status_manager import ProcessingStatus
+
+try:
+    from html_converter import HTMLToMarkdownConverter
+except ImportError:
+    from .html_converter import HTMLToMarkdownConverter
+
+try:
+    from utils import format_time, find_files, clean_markdown_text, extract_metadata_with_llm
+except ImportError:
+    from .utils import format_time, find_files, clean_markdown_text, extract_metadata_with_llm
 
 # 导入内存管理工具
 try:
-    from .memory_utils import cleanup_process_memory, monitor_gpu_memory, setup_memory_monitoring
-except ImportError:
     from memory_utils import cleanup_process_memory, monitor_gpu_memory, setup_memory_monitoring
+except ImportError:
+    try:
+        from .memory_utils import cleanup_process_memory, monitor_gpu_memory, setup_memory_monitoring
+    except ImportError:
+        def cleanup_process_memory(): pass
+        def monitor_gpu_memory(): pass
+        def setup_memory_monitoring(): pass
 
 
 def process_batch_worker(batch_data):
@@ -62,7 +85,10 @@ def process_batch_worker(batch_data):
     
     try:
         # 配置子进程的日志 - 确保子进程有正确的日志配置
-        from .config import configure_logging
+        try:
+            from config import configure_logging
+        except ImportError:
+            from .config import configure_logging
         from datetime import datetime
         
         # 重新配置子进程的日志
@@ -79,7 +105,10 @@ def process_batch_worker(batch_data):
         from mineru.cli.common import read_fn
         from mineru.utils.config_reader import get_device
         from mineru.utils.model_utils import clean_memory
-        from .utils import format_time
+        try:
+            from utils import format_time
+        except ImportError:
+            from .utils import format_time
         
         logger.info(f"进程 {os.getpid()}: 开始处理批次 {batch_idx + 1} ({len(batch_files)} 个文件)")
         
@@ -183,7 +212,10 @@ def process_batch_worker(batch_data):
                         middle_json = json.load(f)
                     
                     # 清洗markdown内容
-                    from .utils import clean_markdown_text
+                    try:
+                        from utils import clean_markdown_text
+                    except ImportError:
+                        from .utils import clean_markdown_text
                     cleaned_content = clean_markdown_text(content)
                     
                     # 移动文件到最终目录
