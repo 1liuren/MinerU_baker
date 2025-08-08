@@ -99,6 +99,36 @@ def parse_args():
     )
 
     
+    # 健康检查配置
+    parser.add_argument(
+        "--health-preset",
+        choices=["conservative", "aggressive", "development", "production"],
+        help="健康监控预设配置"
+    )
+    parser.add_argument(
+        "--disable-auto-restart",
+        action="store_true",
+        help="禁用自动重启功能"
+    )
+    parser.add_argument(
+        "--max-restart-attempts",
+        type=int,
+        default=3,
+        help="最大重启尝试次数 (默认: 3)"
+    )
+    parser.add_argument(
+        "--restart-cooldown",
+        type=int,
+        default=60,
+        help="重启冷却时间（秒） (默认: 60)"
+    )
+    parser.add_argument(
+        "--health-check-interval",
+        type=int,
+        default=30,
+        help="健康检查间隔（秒） (默认: 30)"
+    )
+    
     # 其他配置
     parser.add_argument(
         "--log-level", 
@@ -201,13 +231,40 @@ def main():
             import os
             import subprocess
             import json
+            from .health_monitor import HealthMonitor
+            from .health_config import get_health_config
 
             gpu_list = [int(x) for x in args.gpus.split(',') if x.strip() != ""]
             shard_count = len(gpu_list)
-            procs = []
 
             logger.info(f"启用脚本内多卡并发: GPUs={gpu_list}, 分片数={shard_count}")
 
+            # 获取健康监控配置
+            health_config = get_health_config(args.health_preset)
+            
+            # 应用命令行参数覆盖
+            if args.disable_auto_restart:
+                health_config.enable_auto_restart = False
+            if hasattr(args, 'max_restart_attempts'):
+                health_config.max_restart_attempts = args.max_restart_attempts
+            if hasattr(args, 'restart_cooldown'):
+                health_config.restart_cooldown = args.restart_cooldown
+            if hasattr(args, 'health_check_interval'):
+                health_config.check_interval = args.health_check_interval
+            
+            # 记录配置信息
+            health_config.log_config()
+
+            # 创建健康监控器
+            health_monitor = HealthMonitor(
+                max_restart_attempts=health_config.max_restart_attempts,
+                restart_cooldown=health_config.restart_cooldown,
+                check_interval=health_config.check_interval,
+                memory_threshold=health_config.memory_threshold,
+                enable_auto_restart=health_config.enable_auto_restart
+            )
+
+            # 启动所有子进程
             for shard_index, gpu_id in enumerate(gpu_list):
                 env = os.environ.copy()
                 # 仅暴露当前子进程可见的GPU
@@ -235,39 +292,34 @@ def main():
                 cmd = [c for c in cmd if c != ""]
 
                 logger.info(f"启动子进程: GPU={gpu_id}, shard={shard_index+1}/{shard_count}")
-                procs.append(subprocess.Popen(cmd, env=env))
+                
+                try:
+                    proc = subprocess.Popen(cmd, env=env)
+                    # 注册进程到健康监控器
+                    health_monitor.register_process(shard_index, gpu_id, cmd, proc)
+                    logger.success(f"子进程启动成功: GPU={gpu_id}, PID={proc.pid}")
+                except Exception as e:
+                    logger.error(f"启动子进程失败: GPU={gpu_id}, 错误: {e}")
+                    continue
 
-            # 等待所有子进程结束，并监控进程状态
-            import psutil
-            import signal
+            # 启动健康监控
+            health_monitor.start_monitoring()
             
-            exit_codes = []
-            for i, proc in enumerate(procs):
-                try:
-                    # 等待进程结束，设置超时
-                    exit_code = proc.wait(timeout=3600)  # 1小时超时
-                    exit_codes.append(exit_code)
-                    logger.info(f"子进程 {i+1} 正常结束，退出码: {exit_code}")
-                except subprocess.TimeoutExpired:
-                    logger.warning(f"子进程 {i+1} 超时，强制终止")
-                    proc.kill()
-                    exit_codes.append(-1)
-                except Exception as e:
-                    logger.error(f"子进程 {i+1} 异常: {e}")
-                    exit_codes.append(-1)
-                    
-                # 确保子进程完全清理
-                try:
-                    if proc.poll() is None:  # 进程仍在运行
-                        proc.terminate()
-                        proc.wait(timeout=10)
-                        if proc.poll() is None:
-                            proc.kill()
-                            proc.wait()
-                except Exception as e:
-                    logger.warning(f"清理子进程 {i+1} 失败: {e}")
-            
-            success = all(code == 0 for code in exit_codes)
+            try:
+                # 等待所有进程完成
+                success = health_monitor.wait_for_completion()
+                
+                # 显示最终状态
+                status = health_monitor.get_status()
+                logger.info(f"处理完成统计: 总进程={status['total_processes']}, 存活={status['alive_processes']}, 死亡={status['dead_processes']}")
+                
+            except KeyboardInterrupt:
+                logger.warning("用户中断，正在清理进程...")
+                success = False
+            finally:
+                # 停止监控并清理所有进程
+                health_monitor.stop_monitoring()
+                health_monitor.cleanup_all_processes()
             
             # 进程收尾后做一次全局清理
             try:
@@ -298,6 +350,10 @@ def main():
                     logger.info("全局显存清理完成")
                 except Exception as e:
                     logger.warning(f"全局显存清理失败: {e}")
+                    
+                # 调用专用内存清理
+                from .memory_utils import cleanup_process_memory
+                cleanup_process_memory()
                     
             except Exception as e:
                 logger.warning(f"全局清理失败: {e}")

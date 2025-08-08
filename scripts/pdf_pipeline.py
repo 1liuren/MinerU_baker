@@ -508,7 +508,7 @@ class OptimizedPDFPipeline:
 
     
     def _process_batches_multiprocess(self, batches: List[List[Path]]) -> Tuple[bool, List[Dict]]:
-        """使用多进程处理多个批次"""
+        """使用多进程处理多个批次（带健康监控）"""
         all_processed_data = []
         total_success = 0
         
@@ -531,58 +531,116 @@ class OptimizedPDFPipeline:
         
         logger.info(f"使用多进程处理 {len(batches)} 个批次，最大进程数: {self.concurrent_batches}")
         
+        # 导入子进程健康监控
+        try:
+            from subprocess_health_monitor import SubprocessHealthMonitor
+            
+            # 创建健康监控器
+            monitor_config = {
+                'check_interval': 30.0,  # 30秒检查一次
+                'memory_threshold_mb': 8192.0,  # 8GB内存阈值
+                'cpu_threshold_percent': 95.0,  # 95% CPU阈值
+                'timeout_minutes': 120.0,  # 2小时超时
+                'max_restart_attempts': 2,
+                'restart_cooldown': 60.0
+            }
+            
+            health_monitor = SubprocessHealthMonitor(**monitor_config)
+            logger.info("子进程健康监控已启用")
+            
+        except ImportError as e:
+            logger.warning(f"无法导入子进程健康监控: {e}，将使用基本模式")
+            health_monitor = None
+        
         # 使用进程池处理批次
         with ProcessPoolExecutor(max_workers=self.concurrent_batches) as executor:
-            # 提交所有批次任务
-            future_to_batch = {}
+            # 启动健康监控
+            if health_monitor:
+                health_monitor.start_monitoring(executor)
             
-            for i, batch_data in enumerate(batch_data_list):
-                future = executor.submit(process_batch_worker, batch_data)
-                future_to_batch[future] = (i, batch_data[1])
-            
-            # 收集结果
-            with tqdm(total=len(batches), desc="处理批次", unit="批次") as pbar:
-                for future in as_completed(future_to_batch):
-                    batch_idx, batch_files = future_to_batch[future]
+            try:
+                # 提交所有批次任务
+                future_to_batch = {}
+                
+                for i, batch_data in enumerate(batch_data_list):
+                    future = executor.submit(process_batch_worker, batch_data)
+                    future_to_batch[future] = (i, batch_data[1])
                     
-                    try:
-                        success, data, parse_time = future.result()  # 接收真正的批次处理时间
-                        if success:
-                            all_processed_data.extend(data)
-                            total_success += len(data)
-                            # 更新处理状态
-                            for item in data:
-                                pdf_file = item["pdf_file"]
-                                self.status.mark_processed(
-                                    str(pdf_file), 
-                                    "pdf_processing", 
-                                    parse_time,  # 使用真正的批次处理时间
-                                    success=True
-                                )
-                        else:
-                            # 标记批次中的文件为失败
+                    # 注册到健康监控
+                    if health_monitor:
+                        health_monitor.register_subprocess(future, i, batch_data[1])
+                
+                # 收集结果
+                with tqdm(total=len(batches), desc="处理批次", unit="批次") as pbar:
+                    for future in as_completed(future_to_batch):
+                        batch_idx, batch_files = future_to_batch[future]
+                        
+                        try:
+                            success, data, parse_time = future.result()  # 接收真正的批次处理时间
+                            if success:
+                                all_processed_data.extend(data)
+                                total_success += len(data)
+                                # 更新处理状态
+                                for item in data:
+                                    pdf_file = item["pdf_file"]
+                                    self.status.mark_processed(
+                                        str(pdf_file), 
+                                        "pdf_processing", 
+                                        parse_time,  # 使用真正的批次处理时间
+                                        success=True
+                                    )
+                            else:
+                                # 标记批次中的文件为失败
+                                for pdf_file in batch_files:
+                                    self.status.mark_processed(
+                                        str(pdf_file), 
+                                        "pdf_processing", 
+                                        parse_time,  # 使用真正的批次处理时间
+                                        success=False, 
+                                        error_msg="批次处理失败"
+                                    )
+                            pbar.set_postfix({"成功": total_success})
+                        except Exception as e:
+                            logger.error(f"批次 {batch_idx + 1} 处理异常: {e}")
+                            # 标记批次中的文件为失败，使用默认时间0
                             for pdf_file in batch_files:
                                 self.status.mark_processed(
                                     str(pdf_file), 
                                     "pdf_processing", 
-                                    parse_time,  # 使用真正的批次处理时间
+                                    0,  # 异常情况下使用默认时间
                                     success=False, 
-                                    error_msg="批次处理失败"
+                                    error_msg=f"处理异常: {e}"
                                 )
-                        pbar.set_postfix({"成功": total_success})
+                        finally:
+                            pbar.update(1)
+                            
+                            # 定期输出健康监控报告
+                            if health_monitor and (batch_idx + 1) % 5 == 0:  # 每5个批次输出一次
+                                try:
+                                    report = health_monitor.get_status_report()
+                                    logger.info(f"健康监控报告: 活跃进程={report['active_processes']}, "
+                                              f"平均内存={report['avg_memory_mb']:.1f}MB, "
+                                              f"完成={report['stats']['completed_processes']}, "
+                                              f"失败={report['stats']['failed_processes']}")
+                                except Exception as monitor_e:
+                                    logger.debug(f"获取健康监控报告失败: {monitor_e}")
+            
+            finally:
+                # 清理健康监控
+                if health_monitor:
+                    try:
+                        # 输出最终报告
+                        final_report = health_monitor.get_status_report()
+                        logger.info("最终健康监控报告:")
+                        logger.info(f"  总进程数: {final_report['stats']['total_processes']}")
+                        logger.info(f"  完成进程: {final_report['stats']['completed_processes']}")
+                        logger.info(f"  失败进程: {final_report['stats']['failed_processes']}")
+                        logger.info(f"  OOM终止: {final_report['stats']['oom_kills']}")
+                        logger.info(f"  超时终止: {final_report['stats']['timeout_kills']}")
+                        
+                        health_monitor.cleanup()
                     except Exception as e:
-                        logger.error(f"批次 {batch_idx + 1} 处理异常: {e}")
-                        # 标记批次中的文件为失败，使用默认时间0
-                        for pdf_file in batch_files:
-                            self.status.mark_processed(
-                                str(pdf_file), 
-                                "pdf_processing", 
-                                0,  # 异常情况下使用默认时间
-                                success=False, 
-                                error_msg=f"处理异常: {e}"
-                            )
-                    finally:
-                        pbar.update(1)
+                        logger.warning(f"清理健康监控失败: {e}")
         
         logger.success(f"所有批次处理完成，总共成功处理 {total_success} 个文件")
         return total_success > 0, all_processed_data
