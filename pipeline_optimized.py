@@ -788,19 +788,24 @@ class OptimizedPDFPipeline:
                             with open(json_file, 'r', encoding='utf-8') as f:
                                 middle_json = json.load(f)
                             
+                            # 清洗markdown内容
+                            cleaned_content = self.clean_markdown_text(content)
+                            
                             # 移动文件到最终目录
                             final_dir = self.results_dir / pdf_file.stem
                             final_dir.mkdir(exist_ok=True)
                             
-                            # 复制结果文件
+                            # 保存清洗后的内容到.md文件
                             import shutil
-                            shutil.copy2(md_file, final_dir / f"{pdf_file.stem}.md")
+                            with open(final_dir / f"{pdf_file.stem}.md", 'w', encoding='utf-8') as f:
+                                f.write(cleaned_content)
+                            # 复制middle.json文件
                             shutil.copy2(json_file, final_dir / f"{pdf_file.stem}_middle.json")
                             
                             # 收集文件信息，暂不提取元数据
                             file_contents.append({
                                 "pdf_file": pdf_file,
-                                "content": content,
+                                "content": cleaned_content,
                                 "file_name": file_name,
                                 "idx": idx
                             })
@@ -1181,7 +1186,7 @@ MinerU集成版特性:
         pipeline = OptimizedPDFPipeline(
             input_dir=args.input_dir,
             output_dir=args.output_dir,
-            max_workers=1,  # 批量处理模式不需要多线程
+            max_workers=10,  # 批量处理模式不需要多线程
             backend=args.backend,
             server_url=args.server_url,
             lang=args.lang,
