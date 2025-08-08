@@ -16,7 +16,11 @@ def projection_by_bboxes(boxes: np.array, axis: int) -> np.ndarray:
 
     """
     assert axis in [0, 1]
-    length = np.max(boxes[:, axis::2])
+    # 空输入直接返回空直方图，避免对空数组做归约
+    if boxes is None or boxes.size == 0:
+        return np.zeros(0, dtype=int)
+
+    length = int(np.max(boxes[:, axis::2]))
     res = np.zeros(length, dtype=int)
     # TODO: how to remove for loop?
     for start, end in boxes[:, axis::2]:
@@ -77,6 +81,10 @@ def recursive_xy_cut(boxes: np.ndarray, indices: List[int], res: List[int]):
         res: 保存输出结果
 
     """
+    # 空输入直接返回，避免下游归约/切片报错
+    if boxes is None or len(boxes) == 0:
+        return
+
     # 向 y 轴投影
     assert len(boxes) == len(indices)
 

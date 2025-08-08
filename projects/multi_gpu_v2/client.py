@@ -5,7 +5,7 @@ from loguru import logger
 import asyncio
 import aiohttp
 
-async def mineru_parse_async(session, file_path, server_url='http://127.0.0.1:8000/predict', **options):
+async def mineru_parse_async(session, file_path, server_url='http://10.10.50.52:8111/predict', **options):
     """
     Asynchronous version of the parse function.
     """

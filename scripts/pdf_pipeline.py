@@ -260,7 +260,8 @@ class OptimizedPDFPipeline:
     def __init__(self, input_dir: str, output_dir: str, max_workers: int = 4,
                  backend: str = "vlm-sglang-client", server_url: str = None,
                  lang: str = "ch", api_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                 batch_size: int = 100, concurrent_batches: int = 4):
+                 batch_size: int = 100, concurrent_batches: int = 4,
+                 shard_index: Optional[int] = None, shard_count: Optional[int] = None):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.max_workers = max_workers
@@ -270,6 +271,8 @@ class OptimizedPDFPipeline:
         self.api_url = api_url
         self.batch_size = batch_size
         self.concurrent_batches = concurrent_batches
+        self.shard_index = shard_index
+        self.shard_count = shard_count
 
         # 创建输出目录结构
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -299,6 +302,8 @@ class OptimizedPDFPipeline:
         logger.info(f"Server URL: {self.server_url}")
         logger.info(f"Language: {self.lang}")
         logger.info(f"Max Workers: {self.max_workers}")
+        if self.shard_index is not None and self.shard_count is not None:
+            logger.info(f"Shard: {self.shard_index+1}/{self.shard_count}")
 
     def convert_epub_to_pdf(self) -> bool:
         """转换EPUB文件为PDF"""
@@ -344,7 +349,13 @@ class OptimizedPDFPipeline:
         
         logger.info(f"找到 {len(pdf_files)} 个PDF文件，使用批量处理模式...")
         logger.info("服务端自动处理多进程，无需客户端多线程")
-        
+
+        # 按分片过滤文件
+        if self.shard_index is not None and self.shard_count is not None and self.shard_count > 1:
+            files_sharded = [f for idx, f in enumerate(pdf_files) if idx % self.shard_count == self.shard_index]
+            logger.info(f"分片过滤后: {len(files_sharded)}/{len(pdf_files)} 个文件将由当前分片处理")
+            pdf_files = files_sharded
+
         return self._process_with_batch_mode(pdf_files)
     
     def _process_with_batch_mode(self, pdf_files: List[Path]) -> Tuple[bool, List[Dict]]:
@@ -599,6 +610,8 @@ class OptimizedPDFPipeline:
         logger.info(f"输出目录: {self.output_dir}")
         logger.info(f"最大线程数: {self.max_workers}")
         logger.info(f"处理后端: {self.backend}")
+        if self.shard_index is not None and self.shard_count is not None:
+            logger.info(f"当前分片: {self.shard_index+1}/{self.shard_count}")
         
         start_time = time.time()
         

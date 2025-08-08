@@ -90,6 +90,14 @@ def parse_args():
         help="同时处理的批次数量 (默认: 4)"
     )
 
+    # 多卡/分片设置
+    parser.add_argument(
+        "--gpus",
+        type=str,
+        default="",
+        help="逗号分隔的GPU索引列表，例如: 0,1,2。留空表示单卡/自动"
+    )
+
     
     # 其他配置
     parser.add_argument(
@@ -102,6 +110,20 @@ def parse_args():
         "--version", 
         action="version", 
         version="PDF处理流水线 v1.0.0"
+    )
+
+    # 子进程内部使用的分片参数（不会在帮助中展示给普通用户）
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=None,
+        help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--shard-count",
+        type=int,
+        default=None,
+        help=argparse.SUPPRESS
     )
     
     return parser.parse_args()
@@ -135,6 +157,14 @@ def validate_args(args):
         logger.error("concurrent-batches 必须大于 0")
         return False
 
+    # 校验 gpus 参数格式
+    if args.gpus:
+        try:
+            _ = [int(x) for x in args.gpus.split(',') if x.strip() != ""]
+        except ValueError:
+            logger.error("--gpus 参数格式错误，应为逗号分隔的整数列表，如: 0,1,2")
+            return False
+
     
     # 检查后端配置
     if args.backend == "vlm-sglang-client" and not args.server_url:
@@ -166,21 +196,68 @@ def main():
         logger.info(f"语言: {args.lang}")
         logger.info(f"性能配置: {args.max_workers} 线程, {args.batch_size} 批次大小, {args.concurrent_batches} 并发批次")
         
-        # 创建并运行流水线
-        pipeline = OptimizedPDFPipeline(
-            input_dir=args.input,
-            output_dir=args.output,
-            max_workers=args.max_workers,
-            backend=args.backend,
-            server_url=args.server_url,
-            lang=args.lang,
-            api_url=args.api_url,
-            batch_size=args.batch_size,
-            concurrent_batches=args.concurrent_batches
-        )
-        
-        # 运行流水线
-        success = pipeline.run_pipeline()
+        # 是否启用脚本内自动分卡并发
+        if args.gpus:
+            import os
+            import subprocess
+            import json
+
+            gpu_list = [int(x) for x in args.gpus.split(',') if x.strip() != ""]
+            shard_count = len(gpu_list)
+            procs = []
+
+            logger.info(f"启用脚本内多卡并发: GPUs={gpu_list}, 分片数={shard_count}")
+
+            for shard_index, gpu_id in enumerate(gpu_list):
+                env = os.environ.copy()
+                # 仅暴露当前子进程可见的GPU
+                env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+                # 同时给 MinerU 设置 device（对非CUDA环境可换成 cpu/mps 等）
+                env["MINERU_DEVICE_MODE"] = f"cuda:0"
+
+                cmd = [
+                    sys.executable,
+                    __file__,
+                    "--input", args.input,
+                    "--output", args.output,
+                    "--backend", args.backend,
+                    "--server-url", args.server_url if args.server_url else "",
+                    "--lang", args.lang,
+                    "--api-url", args.api_url,
+                    "--batch-size", str(args.batch_size),
+                    "--concurrent-batches", str(args.concurrent_batches),
+                    "--max-workers", str(args.max_workers),
+                    # 传递分片信息到子进程（子进程内不再传 --gpus）
+                    "--shard-index", str(shard_index),
+                    "--shard-count", str(shard_count)
+                ]
+                # 去掉空的 server-url 参数
+                cmd = [c for c in cmd if c != ""]
+
+                logger.info(f"启动子进程: GPU={gpu_id}, shard={shard_index+1}/{shard_count}")
+                procs.append(subprocess.Popen(cmd, env=env))
+
+            # 等待所有子进程结束
+            exit_codes = [p.wait() for p in procs]
+            success = all(code == 0 for code in exit_codes)
+        else:
+            # 单进程（可搭配 CUDA_VISIBLE_DEVICES 外部设置）
+            pipeline = OptimizedPDFPipeline(
+                input_dir=args.input,
+                output_dir=args.output,
+                max_workers=args.max_workers,
+                backend=args.backend,
+                server_url=args.server_url,
+                lang=args.lang,
+                api_url=args.api_url,
+                batch_size=args.batch_size,
+                concurrent_batches=args.concurrent_batches,
+                # 支持从命令行隐含传入的分片参数（被子进程用）
+                shard_index=getattr(args, "shard_index", None),
+                shard_count=getattr(args, "shard_count", None),
+            )
+
+            success = pipeline.run_pipeline()
         
         if success:
             logger.success("流水线执行成功完成")

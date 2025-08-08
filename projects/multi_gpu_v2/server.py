@@ -105,4 +105,4 @@ if __name__ == '__main__':
         timeout=False
     )
     logger.info("Starting MinerU server on port 8000")
-    server.run(port=8000, generate_client_file=False) 
+    server.run(host='0.0.0.0',port=8000, generate_client_file=False) 
