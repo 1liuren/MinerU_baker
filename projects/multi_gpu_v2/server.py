@@ -39,15 +39,25 @@ class MinerUAPI(ls.LitAPI):
 
     def decode_request(self, request):
         """Decode file and options from request"""
-        file_b64 = request['file']
         options = request.get('options', {})
         
-        file_bytes = base64.b64decode(file_b64)
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp:
-            temp.write(file_bytes)
-            temp_file = Path(temp.name)
+        # 支持两种模式：文件路径模式和文件内容模式
+        if 'file_path' in request:
+            # 文件路径模式：直接使用服务端本地文件
+            input_path = request['file_path']
+            temp_file_created = False
+        else:
+            # 文件内容模式：从base64内容创建临时文件
+            file_b64 = request['file']
+            file_bytes = base64.b64decode(file_b64)
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp:
+                temp.write(file_bytes)
+                input_path = str(Path(temp.name))
+                temp_file_created = True
+        
         return {
-            'input_path': str(temp_file),
+            'input_path': input_path,
+            'temp_file_created': temp_file_created,
             'output_dir': options.get('output_dir', self.output_dir),  # 优先使用客户端传递的output_dir
             'backend': options.get('backend', 'pipeline'),
             'method': options.get('method', 'auto'),
@@ -63,9 +73,10 @@ class MinerUAPI(ls.LitAPI):
         """Call MinerU's do_parse - same as CLI"""
         input_path = inputs['input_path']
         output_dir = inputs['output_dir']
+        temp_file_created = inputs['temp_file_created']
         
-        # 如果客户端指定了output_dir，直接使用；否则创建临时目录
-        if 'output_dir' in inputs and inputs['output_dir'] != self.output_dir:
+        # 如果客户端指定了自定义output_dir，直接使用；否则创建临时目录
+        if output_dir != self.output_dir:
             # 客户端指定了自定义输出目录，直接使用
             final_output_dir = Path(output_dir)
         else:
@@ -98,8 +109,8 @@ class MinerUAPI(ls.LitAPI):
             logger.error(f"Processing failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
         finally:
-            # Cleanup temp file
-            if Path(input_path).exists():
+            # 只有创建了临时文件才需要清理
+            if temp_file_created and Path(input_path).exists():
                 Path(input_path).unlink()
 
     def encode_response(self, response):
