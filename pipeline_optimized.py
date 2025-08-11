@@ -717,8 +717,6 @@ class OptimizedPDFPipeline:
                             _one(idx, pdf_file) for idx, pdf_file in enumerate(valid_files)
                         ]
                         return await asyncio.gather(*tasks, return_exceptions=True)
-
-                parse_start_time = time.time()
                 # 独立事件循环，避免与外层冲突
                 loop = asyncio.new_event_loop()
                 try:
@@ -727,39 +725,14 @@ class OptimizedPDFPipeline:
                 finally:
                     loop.close()
                 
-                logger.info(f"批次 {batch_idx + 1}: 服务端并发调用返回结果：{results}")
 
-
-
-                # 简化错误处理：只区分成功和失败，减少复杂的错误分类
-                failed_count = 0
-                
-                # for i, r in enumerate(results):
-                #     if isinstance(r, Exception) or (isinstance(r, dict) and 'error' in r):
-                #         failed_count += 1
-                #         # 简化错误信息，只记录一次
-                #         error_msg = str(r) if isinstance(r, Exception) else r['error']
-                #         logger.error(f"文件 {valid_files[i].name} 处理失败: {error_msg}")
-                #         self.status.mark_processed(
-                #             str(valid_files[i]), 
-                #             "pdf_processing", 
-                #             0, 
-                #             False, 
-                #             "处理失败"
-                #         )
-                
-                # # 简化日志输出
-                # if failed_count > 0:
-                #     logger.warning(f"批次 {batch_idx + 1}: {failed_count} 个文件失败")
-                
-                parse_time = time.time() - parse_start_time
-                logger.success(f"批次 {batch_idx + 1}: 服务端并发调用完成，耗时 {self.format_time(parse_time)}")
                 
             except Exception as e:
                 logger.error(f"批次 {batch_idx + 1}: 处理过程中发生异常: {e}")
                 logger.debug(traceback.format_exc())
                 return False, []
             
+            logger.info(f"批次 {batch_idx + 1}: 服务端并发调用返回结果：{results}")
             process_time = time.time() - process_start_time
             logger.info(f"批次 {batch_idx + 1}: 处理耗时 {self.format_time(process_time)}")
             
@@ -790,8 +763,8 @@ class OptimizedPDFPipeline:
                             # 读取处理结果
                             with open(md_file, 'r', encoding='utf-8') as f:
                                 content = f.read()
-                            with open(json_file, 'r', encoding='utf-8') as f:
-                                middle_json = json.load(f)
+                            # with open(json_file, 'r', encoding='utf-8') as f:
+                            #     middle_json = json.load(f)
                             
                             # 清洗markdown内容
                             cleaned_content = self.clean_markdown_text(content)
