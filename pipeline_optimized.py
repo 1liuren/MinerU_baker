@@ -3,6 +3,12 @@
 """
 PDF批处理流水线 - MinerU集成版
 使用MinerU进行PDF处理，支持进度条显示，移除超分功能
+
+修改说明：
+- 已修改为使用文件路径模式调用MinerU服务端
+- 使用mineru_parse_by_file_path替代mineru_parse_async
+- 避免上传文件内容，直接传递服务端本地文件路径
+- 提升处理效率，减少网络传输开销
 """
 
 from math import fabs
@@ -647,6 +653,8 @@ class OptimizedPDFPipeline:
                 logger.info(f"批次 {batch_idx + 1}: 通过HTTP服务(异步)处理 {len(valid_files)} 个文件")
                 logger.info(f"批次 {batch_idx + 1}: 使用后端 {self.backend}，目标输出目录 {self.results_dir}")
 
+                results_abs_dir = str(self.results_dir.resolve())
+
             #  # 动态导入异步客户端
             #  import importlib.util as _importlib_util
             #  client_path = Path(__file__).parent / "projects" / "multi_gpu_v2" / "client.py"
@@ -654,7 +662,7 @@ class OptimizedPDFPipeline:
             #  mclient = _importlib_util.module_from_spec(spec_client)
             #  spec_client.loader.exec_module(mclient)
             #  mineru_parse_async = getattr(mclient, "mineru_parse_async")
-                from projects.multi_gpu_v2.client import mineru_parse_async
+                from projects.multi_gpu_v2.client import mineru_parse_by_file_path
 
 
                 # 服务端/predict地址：优先环境变量MINERU_SERVICE_URL，否则默认本机
@@ -684,8 +692,8 @@ class OptimizedPDFPipeline:
                                 'output_dir': str(self.results_dir),
                             }
                             async with semaphore:
-                                # 修复server_url参数重复传递的问题：直接传递service_url作为位置参数
-                                return await mineru_parse_async(session, str(pdf_path), service_url, **opts)
+                                # 使用文件路径模式，直接传递服务端本地文件路径，避免上传文件内容
+                                return await mineru_parse_by_file_path(session, str(pdf_path), service_url, **opts)
 
                         tasks = [
                             _one(idx, pdf_file) for idx, pdf_file in enumerate(valid_files)

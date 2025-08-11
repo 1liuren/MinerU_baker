@@ -100,7 +100,14 @@ class MinerUAPI(ls.LitAPI):
                 table_enable=inputs['table_enable'],
                 server_url=inputs['server_url'],
                 start_page_id=inputs['start_page_id'],
-                end_page_id=inputs['end_page_id']
+                end_page_id=inputs['end_page_id'],
+                f_draw_layout_bbox=False,
+                f_draw_span_bbox=False,
+                f_dump_md=True,
+                f_dump_middle_json=True,
+                f_dump_model_output=False,
+                f_dump_orig_pdf=False,
+                f_dump_content_list=False
             )
             
             return str(final_output_dir)
@@ -125,4 +132,4 @@ if __name__ == '__main__':
         timeout=False
     )
     logger.info("Starting MinerU server on port 8000")
-    server.run(host='0.0.0.0',port=8000, generate_client_file=False)
+    server.run(host='0.0.0.0',port=8111, generate_client_file=False)

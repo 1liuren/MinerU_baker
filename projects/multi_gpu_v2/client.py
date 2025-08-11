@@ -63,7 +63,7 @@ async def mineru_parse_async(session, file_path, server_url='http://10.10.50.52:
         logger.error(f"❌ Failed to process {file_path}: {e}")
         return {'error': str(e)}
 
-async def mineru_parse_by_file_path(session, file_path, server_url='http://127.0.0.1:8000/predict', **options):
+async def mineru_parse_by_file_path(session, file_path, server_url='http://10.10.50.52:8111/predict', **options):
     """
     使用文件路径模式调用MinerU服务端，避免创建临时文件
     
