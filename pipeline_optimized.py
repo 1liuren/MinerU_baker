@@ -689,7 +689,7 @@ class OptimizedPDFPipeline:
                                 # VLM后端的URL使用 vlm_server_url，避免与HTTP请求参数 server_url 冲突
                                 'vlm_server_url': None,
                                 # 指定服务端输出根目录为批次临时目录
-                                'output_dir': str(results_abs_dir),
+                                'output_dir': str(temp_output_dir),
                             }
                             async with semaphore:
                                 # 使用文件路径模式，直接传递服务端本地文件路径，避免上传文件内容

@@ -6,7 +6,8 @@ import litserve as ls
 from fastapi import HTTPException
 from loguru import logger
 
-from mineru.cli.common import do_parse, read_fn
+from mineru.cli.common import read_fn
+from demo import do_parse
 from mineru.utils.config_reader import get_device
 from mineru.utils.model_utils import get_vram
 from _config_endpoint import config_endpoint
@@ -128,7 +129,7 @@ if __name__ == '__main__':
         MinerUAPI(output_dir='/tmp/mineru_output'),
         accelerator='auto',
         devices='auto',
-        workers_per_device=1,
+        workers_per_device=4,
         timeout=False
     )
     logger.info("Starting MinerU server on port 8000")
