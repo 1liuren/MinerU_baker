@@ -107,14 +107,6 @@ class MinerUAPI(ls.LitAPI):
             
             file_name = Path(input_path).stem
             
-            # 添加资源监控和清理
-            import gc
-            import torch
-            
-            # 处理前清理一次
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
             
             logger.info(f"开始处理文件: {input_path} (大小: {file_size / 1024 / 1024:.2f} MB)")
             
@@ -139,11 +131,7 @@ class MinerUAPI(ls.LitAPI):
                 f_dump_content_list=False
             )
             
-            # 处理后清理
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
+
             
             logger.info(f"文件处理完成: {input_path}")
             return str(final_output_dir)
@@ -157,12 +145,6 @@ class MinerUAPI(ls.LitAPI):
         except MemoryError as e:
             logger.error(f"内存不足: {e}")
             # 强制清理内存
-            import gc
-            import torch
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
             raise HTTPException(status_code=507, detail=f"内存不足，无法处理文件: {input_path}")
         except Exception as e:
             logger.error(f"处理失败 {input_path}: {e}")
@@ -170,16 +152,6 @@ class MinerUAPI(ls.LitAPI):
             import traceback
             logger.error(f"错误堆栈: {traceback.format_exc()}")
             
-            # 清理资源
-            try:
-                import gc
-                import torch
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.ipc_collect()
-            except:
-                pass
             
             raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
         finally:
