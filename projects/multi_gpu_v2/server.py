@@ -132,10 +132,16 @@ class MinerUAPI(ls.LitAPI):
             )
             
             # 处理后清理
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
+            # 清理资源
+            try:
+                import gc
+                import torch
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+            except:
+                pass
             
             logger.info(f"文件处理完成: {input_path}")
             return str(final_output_dir)

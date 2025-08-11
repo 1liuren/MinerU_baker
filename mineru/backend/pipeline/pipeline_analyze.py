@@ -37,29 +37,6 @@ class ModelSingleton:
                 table_enable=table_enable,
             )
         return self._models[key]
-    
-    def clear_models(self):
-        """清理所有缓存的模型"""
-        try:
-            import gc
-            import torch
-            
-            # 删除所有模型引用
-            for key in list(self._models.keys()):
-                del self._models[key]
-            self._models.clear()
-            
-            # 强制垃圾回收
-            gc.collect()
-            
-            # 清理CUDA缓存
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
-                
-            logger.info("ModelSingleton 模型缓存已清理")
-        except Exception as e:
-            logger.warning(f"ModelSingleton 清理失败: {e}")
 
 
 def custom_model_init(

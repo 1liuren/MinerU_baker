@@ -338,8 +338,5 @@ class BatchAnalyze:
                                 layout_res_item['category_id'] = 16
 
                     total_processed += len(img_crop_list)
-            
-            # OCR识别完成后清理显存
-            clean_vram(self.model.device, vram_threshold=8)
 
         return images_layout_res

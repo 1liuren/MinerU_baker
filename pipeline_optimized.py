@@ -725,60 +725,33 @@ class OptimizedPDFPipeline:
                 finally:
                     loop.close()
 
-                # 检查错误并记录失败的文件，但不中断整个批次
-                failed_files = []
-                successful_results = []
+                # 简化错误处理：只区分成功和失败，减少复杂的错误分类
+                failed_count = 0
+                
                 for i, r in enumerate(results):
-                    if isinstance(r, Exception):
-                        logger.error(f"批次 {batch_idx + 1}: 文件 {valid_files[i].name} 处理异常: {r}")
-                        failed_files.append((valid_files[i], str(r)))
-                        # 标记文件处理失败
+                    if isinstance(r, Exception) or (isinstance(r, dict) and 'error' in r):
+                        failed_count += 1
+                        # 简化错误信息，只记录一次
+                        error_msg = str(r) if isinstance(r, Exception) else r['error']
+                        logger.error(f"文件 {valid_files[i].name} 处理失败: {error_msg}")
                         self.status.mark_processed(
                             str(valid_files[i]), 
                             "pdf_processing", 
                             0, 
                             False, 
-                            f"处理异常: {str(r)}"
+                            "处理失败"
                         )
-                    elif isinstance(r, dict) and 'error' in r:
-                        error_msg = r['error']
-                        logger.error(f"批次 {batch_idx + 1}: 文件 {valid_files[i].name} 处理失败: {error_msg}")
-                        failed_files.append((valid_files[i], error_msg))
-                        # 标记文件处理失败
-                        self.status.mark_processed(
-                            str(valid_files[i]), 
-                            "pdf_processing", 
-                            0, 
-                            False, 
-                            f"服务端错误: {error_msg}"
-                        )
-                    else:
-                        successful_results.append((i, r))
                 
-                if failed_files:
-                    logger.warning(f"批次 {batch_idx + 1}: {len(failed_files)} 个文件处理失败，{len(successful_results)} 个文件成功")
-                    for failed_file, error in failed_files:
-                        logger.warning(f"  失败文件: {failed_file.name} - {error}")
+                # 简化日志输出
+                if failed_count > 0:
+                    logger.warning(f"批次 {batch_idx + 1}: {failed_count} 个文件失败")
                 
-                # 如果所有文件都失败了，抛出异常
-                if not successful_results:
-                    raise RuntimeError(f"批次 {batch_idx + 1}: 所有 {len(valid_files)} 个文件都处理失败")
-                
-                # 更新valid_files列表，只保留成功处理的文件
-                original_valid_files = valid_files.copy()
-                valid_files = [original_valid_files[i] for i, _ in successful_results]
-                file_name_list = [file_name_list[i] for i, _ in successful_results]
-                pdf_bytes_list = [pdf_bytes_list[i] for i, _ in successful_results]
-                lang_list = [lang_list[i] for i, _ in successful_results]
-                
-                logger.info(f"批次 {batch_idx + 1}: 继续处理 {len(valid_files)} 个成功的文件")
-
                 parse_time = time.time() - parse_start_time
                 logger.success(f"批次 {batch_idx + 1}: 服务端并发调用完成，耗时 {self.format_time(parse_time)}")
                 
             except Exception as e:
-                logger.error(f"批次 {batch_idx + 1}: do_parse调用失败: {e}")
-                logger.error(traceback.format_exc())
+                logger.error(f"批次 {batch_idx + 1}: 处理过程中发生异常: {e}")
+                logger.debug(traceback.format_exc())
                 return False, []
             
             process_time = time.time() - process_start_time
