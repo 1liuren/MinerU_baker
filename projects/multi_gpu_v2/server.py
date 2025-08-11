@@ -48,6 +48,7 @@ class MinerUAPI(ls.LitAPI):
             temp_file = Path(temp.name)
         return {
             'input_path': str(temp_file),
+            'output_dir': options.get('output_dir', self.output_dir),  # 优先使用客户端传递的output_dir
             'backend': options.get('backend', 'pipeline'),
             'method': options.get('method', 'auto'),
             'lang': options.get('lang', 'ch'),
@@ -61,16 +62,24 @@ class MinerUAPI(ls.LitAPI):
     def predict(self, inputs):
         """Call MinerU's do_parse - same as CLI"""
         input_path = inputs['input_path']
-        output_dir = Path(self.output_dir) / Path(input_path).stem
+        output_dir = inputs['output_dir']
+        
+        # 如果客户端指定了output_dir，直接使用；否则创建临时目录
+        if 'output_dir' in inputs and inputs['output_dir'] != self.output_dir:
+            # 客户端指定了自定义输出目录，直接使用
+            final_output_dir = Path(output_dir)
+        else:
+            # 使用默认行为：在服务端默认目录下创建临时子目录
+            final_output_dir = Path(output_dir) / Path(input_path).stem
         
         try:
-            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(final_output_dir, exist_ok=True)
             
             file_name = Path(input_path).stem
             pdf_bytes = read_fn(Path(input_path))
             
             do_parse(
-                output_dir=str(output_dir),
+                output_dir=str(final_output_dir),
                 pdf_file_names=[file_name],
                 pdf_bytes_list=[pdf_bytes],
                 p_lang_list=[inputs['lang']],
@@ -83,7 +92,7 @@ class MinerUAPI(ls.LitAPI):
                 end_page_id=inputs['end_page_id']
             )
             
-            return str(output_dir)
+            return str(final_output_dir)
             
         except Exception as e:
             logger.error(f"Processing failed: {e}")
@@ -105,4 +114,4 @@ if __name__ == '__main__':
         timeout=False
     )
     logger.info("Starting MinerU server on port 8000")
-    server.run(host='0.0.0.0',port=8000, generate_client_file=False) 
+    server.run(host='0.0.0.0',port=8000, generate_client_file=False)

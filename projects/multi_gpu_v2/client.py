@@ -90,7 +90,7 @@ async def main():
         # === Custom Options ===
         custom_options = {
             'backend': 'pipeline', 'lang': 'ch', 'method': 'auto',
-            'formula_enable': True, 'table_enable': True
+            'formula_enable': True, 'table_enable': True,'output_dir': './output'
         }
         # 'backend': 'sglang-engine' requires 24+ GB VRAM per worker
 

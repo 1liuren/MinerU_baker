@@ -644,69 +644,72 @@ class OptimizedPDFPipeline:
             
             # 调用HTTP服务进行批量处理（异步并发）
             try:
-                 logger.info(f"批次 {batch_idx + 1}: 通过HTTP服务(异步)处理 {len(valid_files)} 个文件")
-                 logger.info(f"批次 {batch_idx + 1}: 使用后端 {self.backend}，目标输出目录 {self.results_dir}")
+                logger.info(f"批次 {batch_idx + 1}: 通过HTTP服务(异步)处理 {len(valid_files)} 个文件")
+                logger.info(f"批次 {batch_idx + 1}: 使用后端 {self.backend}，目标输出目录 {self.results_dir}")
 
-                 # 动态导入异步客户端
-                 import importlib.util as _importlib_util
-                 client_path = Path(__file__).parent / "projects" / "multi_gpu_v2" / "client.py"
-                 spec_client = _importlib_util.spec_from_file_location("mclient", client_path)
-                 mclient = _importlib_util.module_from_spec(spec_client)
-                 spec_client.loader.exec_module(mclient)
-                 mineru_parse_async = getattr(mclient, "mineru_parse_async")
+            #  # 动态导入异步客户端
+            #  import importlib.util as _importlib_util
+            #  client_path = Path(__file__).parent / "projects" / "multi_gpu_v2" / "client.py"
+            #  spec_client = _importlib_util.spec_from_file_location("mclient", client_path)
+            #  mclient = _importlib_util.module_from_spec(spec_client)
+            #  spec_client.loader.exec_module(mclient)
+            #  mineru_parse_async = getattr(mclient, "mineru_parse_async")
+                from projects.multi_gpu_v2.client import mineru_parse_async
 
-                 # 服务端/predict地址：优先环境变量MINERU_SERVICE_URL，否则默认本机
-                 service_url = os.getenv("MINERU_SERVICE_URL", "http://10.10.50.52:8111/predict")
 
-                 import asyncio
-                 import aiohttp
+                # 服务端/predict地址：优先环境变量MINERU_SERVICE_URL，否则默认本机
+                service_url = os.getenv("MINERU_SERVICE_URL", "http://10.10.50.52:8111/predict")
 
-                 async def _run_async_calls():
-                     # 每批次内部的HTTP并发，使用 max_workers 控制
-                     concurrency = max(1, int(self.max_workers))
-                     semaphore = asyncio.Semaphore(concurrency)
+                import asyncio
+                import aiohttp
 
-                     async with aiohttp.ClientSession() as session:
-                         async def _one(idx, pdf_path):
-                             opts = {
-                                 'backend': self.backend,
-                                 'method': 'auto',
-                                 'lang': lang_list[idx],
-                                 'formula_enable': True,
-                                 'table_enable': True,
-                                 'start_page_id': 0,
-                                 'end_page_id': None,
-                                 # VLM后端的URL使用 vlm_server_url，避免与HTTP请求参数 server_url 冲突
-                                 'vlm_server_url': None,
-                                 # 指定服务端输出根目录为批次临时目录
-                                 'output_dir': str(self.results_dir),
-                             }
-                             async with semaphore:
-                                 return await mineru_parse_async(session, str(pdf_path), server_url=service_url, **opts)
+                async def _run_async_calls():
+                    # 每批次内部的HTTP并发，使用 max_workers 控制
+                    concurrency = max(1, int(self.max_workers))
+                    semaphore = asyncio.Semaphore(concurrency)
 
-                         tasks = [
-                             _one(idx, pdf_file) for idx, pdf_file in enumerate(valid_files)
-                         ]
-                         return await asyncio.gather(*tasks, return_exceptions=True)
+                    async with aiohttp.ClientSession() as session:
+                        async def _one(idx, pdf_path):
+                            opts = {
+                                'backend': self.backend,
+                                'method': 'auto',
+                                'lang': lang_list[idx],
+                                'formula_enable': True,
+                                'table_enable': True,
+                                'start_page_id': 0,
+                                'end_page_id': None,
+                                # VLM后端的URL使用 vlm_server_url，避免与HTTP请求参数 server_url 冲突
+                                'vlm_server_url': None,
+                                # 指定服务端输出根目录为批次临时目录
+                                'output_dir': str(self.results_dir),
+                            }
+                            async with semaphore:
+                                # 修复server_url参数重复传递的问题：直接传递service_url作为位置参数
+                                return await mineru_parse_async(session, str(pdf_path), service_url, **opts)
 
-                 parse_start_time = time.time()
-                 # 独立事件循环，避免与外层冲突
-                 loop = asyncio.new_event_loop()
-                 try:
-                     asyncio.set_event_loop(loop)
-                     results = loop.run_until_complete(_run_async_calls())
-                 finally:
-                     loop.close()
+                        tasks = [
+                            _one(idx, pdf_file) for idx, pdf_file in enumerate(valid_files)
+                        ]
+                        return await asyncio.gather(*tasks, return_exceptions=True)
 
-                 # 检查错误
-                 for r in results:
-                     if isinstance(r, Exception):
-                         raise r
-                     if isinstance(r, dict) and 'error' in r:
-                         raise RuntimeError(r['error'])
+                parse_start_time = time.time()
+                # 独立事件循环，避免与外层冲突
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    results = loop.run_until_complete(_run_async_calls())
+                finally:
+                    loop.close()
 
-                 parse_time = time.time() - parse_start_time
-                 logger.success(f"批次 {batch_idx + 1}: 服务端并发调用完成，耗时 {self.format_time(parse_time)}")
+                # 检查错误
+                for r in results:
+                    if isinstance(r, Exception):
+                        raise r
+                    if isinstance(r, dict) and 'error' in r:
+                        raise RuntimeError(r['error'])
+
+                parse_time = time.time() - parse_start_time
+                logger.success(f"批次 {batch_idx + 1}: 服务端并发调用完成，耗时 {self.format_time(parse_time)}")
                 
             except Exception as e:
                 logger.error(f"批次 {batch_idx + 1}: do_parse调用失败: {e}")
