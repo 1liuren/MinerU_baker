@@ -88,6 +88,29 @@ class AtomModelSingleton:
         if key not in self._models:
             self._models[key] = atom_model_init(model_name=atom_model_name, **kwargs)
         return self._models[key]
+    
+    def clear_models(self):
+        """清理所有缓存的原子模型"""
+        try:
+            import gc
+            import torch
+            
+            # 删除所有模型引用
+            for key in list(self._models.keys()):
+                del self._models[key]
+            self._models.clear()
+            
+            # 强制垃圾回收
+            gc.collect()
+            
+            # 清理CUDA缓存
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+                
+            logger.info("AtomModelSingleton 模型缓存已清理")
+        except Exception as e:
+            logger.warning(f"AtomModelSingleton 清理失败: {e}")
 
 def atom_model_init(model_name: str, **kwargs):
     atom_model = None
