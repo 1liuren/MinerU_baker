@@ -677,7 +677,7 @@ class OptimizedPDFPipeline:
                     semaphore = asyncio.Semaphore(concurrency)
 
                     async with aiohttp.ClientSession() as session:
-                        async def _one(idx, pdf_path):
+                        async def _one(idx, pdf_path, max_retries=2):
                             opts = {
                                 'backend': self.backend,
                                 'method': 'auto',
@@ -691,11 +691,25 @@ class OptimizedPDFPipeline:
                                 # 指定服务端输出根目录为批次临时目录
                                 'output_dir': str(temp_output_dir),
                             }
-                            async with semaphore:
-                                # 使用文件路径模式，直接传递服务端本地文件路径，避免上传文件内容
-                                # 将相对路径转换为绝对路径，确保服务端能找到文件
-                                abs_pdf_path = str(pdf_path.resolve())
-                                return await mineru_parse_by_file_path(session, abs_pdf_path, service_url, **opts)
+                            
+                            # 带重试机制的处理
+                            for attempt in range(max_retries + 1):
+                                try:
+                                    async with semaphore:
+                                        # 使用文件路径模式，直接传递服务端本地文件路径，避免上传文件内容
+                                        # 将相对路径转换为绝对路径，确保服务端能找到文件
+                                        abs_pdf_path = str(pdf_path.resolve())
+                                        result = await mineru_parse_by_file_path(session, abs_pdf_path, service_url, **opts)
+                                        return result
+                                except Exception as e:
+                                    if attempt < max_retries:
+                                        logger.warning(f"文件 {pdf_path.name} 第 {attempt + 1} 次处理失败，准备重试: {e}")
+                                        # 短暂等待后重试
+                                        await asyncio.sleep(1 + attempt)  # 递增等待时间
+                                    else:
+                                        logger.error(f"文件 {pdf_path.name} 经过 {max_retries + 1} 次尝试后仍然失败: {e}")
+                                        return e
+                            return Exception(f"文件 {pdf_path.name} 处理失败")
 
                         tasks = [
                             _one(idx, pdf_file) for idx, pdf_file in enumerate(valid_files)
@@ -711,12 +725,53 @@ class OptimizedPDFPipeline:
                 finally:
                     loop.close()
 
-                # 检查错误
-                for r in results:
+                # 检查错误并记录失败的文件，但不中断整个批次
+                failed_files = []
+                successful_results = []
+                for i, r in enumerate(results):
                     if isinstance(r, Exception):
-                        raise r
-                    if isinstance(r, dict) and 'error' in r:
-                        raise RuntimeError(r['error'])
+                        logger.error(f"批次 {batch_idx + 1}: 文件 {valid_files[i].name} 处理异常: {r}")
+                        failed_files.append((valid_files[i], str(r)))
+                        # 标记文件处理失败
+                        self.status.mark_processed(
+                            str(valid_files[i]), 
+                            "pdf_processing", 
+                            0, 
+                            False, 
+                            f"处理异常: {str(r)}"
+                        )
+                    elif isinstance(r, dict) and 'error' in r:
+                        error_msg = r['error']
+                        logger.error(f"批次 {batch_idx + 1}: 文件 {valid_files[i].name} 处理失败: {error_msg}")
+                        failed_files.append((valid_files[i], error_msg))
+                        # 标记文件处理失败
+                        self.status.mark_processed(
+                            str(valid_files[i]), 
+                            "pdf_processing", 
+                            0, 
+                            False, 
+                            f"服务端错误: {error_msg}"
+                        )
+                    else:
+                        successful_results.append((i, r))
+                
+                if failed_files:
+                    logger.warning(f"批次 {batch_idx + 1}: {len(failed_files)} 个文件处理失败，{len(successful_results)} 个文件成功")
+                    for failed_file, error in failed_files:
+                        logger.warning(f"  失败文件: {failed_file.name} - {error}")
+                
+                # 如果所有文件都失败了，抛出异常
+                if not successful_results:
+                    raise RuntimeError(f"批次 {batch_idx + 1}: 所有 {len(valid_files)} 个文件都处理失败")
+                
+                # 更新valid_files列表，只保留成功处理的文件
+                original_valid_files = valid_files.copy()
+                valid_files = [original_valid_files[i] for i, _ in successful_results]
+                file_name_list = [file_name_list[i] for i, _ in successful_results]
+                pdf_bytes_list = [pdf_bytes_list[i] for i, _ in successful_results]
+                lang_list = [lang_list[i] for i, _ in successful_results]
+                
+                logger.info(f"批次 {batch_idx + 1}: 继续处理 {len(valid_files)} 个成功的文件")
 
                 parse_time = time.time() - parse_start_time
                 logger.success(f"批次 {batch_idx + 1}: 服务端并发调用完成，耗时 {self.format_time(parse_time)}")

@@ -6,8 +6,9 @@ import litserve as ls
 from fastapi import HTTPException
 from loguru import logger
 
+# from mineru.cli.common import do_parse, read_fn
 from mineru.cli.common import read_fn
-from demo import do_parse
+from demo.demo import do_parse
 from mineru.utils.config_reader import get_device
 from mineru.utils.model_utils import get_vram
 from _config_endpoint import config_endpoint
@@ -85,10 +86,37 @@ class MinerUAPI(ls.LitAPI):
             final_output_dir = Path(output_dir) / Path(input_path).stem
         
         try:
+            # 检查输入文件是否存在
+            if not Path(input_path).exists():
+                raise FileNotFoundError(f"输入文件不存在: {input_path}")
+            
+            # 检查文件大小
+            file_size = Path(input_path).stat().st_size
+            if file_size == 0:
+                raise ValueError(f"输入文件为空: {input_path}")
+            
+            # 检查文件是否为有效的PDF
+            try:
+                pdf_bytes = read_fn(Path(input_path))
+                if len(pdf_bytes) == 0:
+                    raise ValueError(f"PDF文件内容为空: {input_path}")
+            except Exception as e:
+                raise ValueError(f"无法读取PDF文件 {input_path}: {e}")
+            
             os.makedirs(final_output_dir, exist_ok=True)
             
             file_name = Path(input_path).stem
-            pdf_bytes = read_fn(Path(input_path))
+            
+            # 添加资源监控和清理
+            import gc
+            import torch
+            
+            # 处理前清理一次
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            logger.info(f"开始处理文件: {input_path} (大小: {file_size / 1024 / 1024:.2f} MB)")
             
             do_parse(
                 output_dir=str(final_output_dir),
@@ -111,15 +139,56 @@ class MinerUAPI(ls.LitAPI):
                 f_dump_content_list=False
             )
             
+            # 处理后清理
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+            
+            logger.info(f"文件处理完成: {input_path}")
             return str(final_output_dir)
             
+        except FileNotFoundError as e:
+            logger.error(f"文件不存在错误: {e}")
+            raise HTTPException(status_code=404, detail=str(e))
+        except ValueError as e:
+            logger.error(f"文件格式错误: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+        except MemoryError as e:
+            logger.error(f"内存不足: {e}")
+            # 强制清理内存
+            import gc
+            import torch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+            raise HTTPException(status_code=507, detail=f"内存不足，无法处理文件: {input_path}")
         except Exception as e:
-            logger.error(f"Processing failed: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            logger.error(f"处理失败 {input_path}: {e}")
+            logger.error(f"错误类型: {type(e).__name__}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
+            
+            # 清理资源
+            try:
+                import gc
+                import torch
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+            except:
+                pass
+            
+            raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
         finally:
             # 只有创建了临时文件才需要清理
             if temp_file_created and Path(input_path).exists():
-                Path(input_path).unlink()
+                try:
+                    Path(input_path).unlink()
+                except Exception as e:
+                    logger.warning(f"清理临时文件失败 {input_path}: {e}")
 
     def encode_response(self, response):
         return {'output_dir': response}
@@ -129,7 +198,7 @@ if __name__ == '__main__':
         MinerUAPI(output_dir='/tmp/mineru_output'),
         accelerator='auto',
         devices='auto',
-        workers_per_device=4,
+        workers_per_device=1,
         timeout=False
     )
     logger.info("Starting MinerU server on port 8000")
