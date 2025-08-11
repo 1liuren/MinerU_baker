@@ -11,7 +11,7 @@ PDF批处理流水线 - MinerU集成版
 - 提升处理效率，减少网络传输开销
 """
 
-from math import fabs
+from math import fabs, log
 import os
 import sys
 import json
@@ -666,7 +666,7 @@ class OptimizedPDFPipeline:
 
 
                 # 服务端/predict地址：优先环境变量MINERU_SERVICE_URL，否则默认本机
-                service_url = os.getenv("MINERU_SERVICE_URL", "http://10.10.50.52:8111/predict")
+                service_url = os.getenv("MINERU_SERVICE_URL", "http://10.10.50.50:8111/predict")
 
                 import asyncio
                 import aiohttp
@@ -676,7 +676,9 @@ class OptimizedPDFPipeline:
                     concurrency = max(1, int(self.max_workers))
                     semaphore = asyncio.Semaphore(concurrency)
 
-                    async with aiohttp.ClientSession() as session:
+                    # 设置HTTP客户端超时
+                    timeout = aiohttp.ClientTimeout(total=600)  # 10分钟超时
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
                         async def _one(idx, pdf_path, max_retries=2):
                             opts = {
                                 'backend': self.backend,
@@ -724,27 +726,31 @@ class OptimizedPDFPipeline:
                     results = loop.run_until_complete(_run_async_calls())
                 finally:
                     loop.close()
+                
+                logger.info(f"批次 {batch_idx + 1}: 服务端并发调用返回结果：{results}")
+
+
 
                 # 简化错误处理：只区分成功和失败，减少复杂的错误分类
                 failed_count = 0
                 
-                for i, r in enumerate(results):
-                    if isinstance(r, Exception) or (isinstance(r, dict) and 'error' in r):
-                        failed_count += 1
-                        # 简化错误信息，只记录一次
-                        error_msg = str(r) if isinstance(r, Exception) else r['error']
-                        logger.error(f"文件 {valid_files[i].name} 处理失败: {error_msg}")
-                        self.status.mark_processed(
-                            str(valid_files[i]), 
-                            "pdf_processing", 
-                            0, 
-                            False, 
-                            "处理失败"
-                        )
+                # for i, r in enumerate(results):
+                #     if isinstance(r, Exception) or (isinstance(r, dict) and 'error' in r):
+                #         failed_count += 1
+                #         # 简化错误信息，只记录一次
+                #         error_msg = str(r) if isinstance(r, Exception) else r['error']
+                #         logger.error(f"文件 {valid_files[i].name} 处理失败: {error_msg}")
+                #         self.status.mark_processed(
+                #             str(valid_files[i]), 
+                #             "pdf_processing", 
+                #             0, 
+                #             False, 
+                #             "处理失败"
+                #         )
                 
-                # 简化日志输出
-                if failed_count > 0:
-                    logger.warning(f"批次 {batch_idx + 1}: {failed_count} 个文件失败")
+                # # 简化日志输出
+                # if failed_count > 0:
+                #     logger.warning(f"批次 {batch_idx + 1}: {failed_count} 个文件失败")
                 
                 parse_time = time.time() - parse_start_time
                 logger.success(f"批次 {batch_idx + 1}: 服务端并发调用完成，耗时 {self.format_time(parse_time)}")

@@ -131,17 +131,36 @@ class MinerUAPI(ls.LitAPI):
                 f_dump_content_list=False
             )
             
-            # 处理后清理
-            # 清理资源
+            # 处理后清理 - 增强显存清理
             try:
+                # 清理局部变量引用
+                del pdf_bytes
+                
+                # 强制垃圾回收
                 import gc
-                import torch
                 gc.collect()
+                
+                # GPU显存清理
+                import torch
                 if torch.cuda.is_available():
+                    # 清理当前设备缓存
                     torch.cuda.empty_cache()
                     torch.cuda.ipc_collect()
-            except:
-                pass
+                    # 同步所有CUDA操作
+                    torch.cuda.synchronize()
+                
+                # 尝试使用MinerU的清理工具
+                try:
+                    from mineru.utils.model_utils import clean_memory
+                    from mineru.utils.config_reader import get_device
+                    device = get_device()
+                    clean_memory(device)
+                except Exception:
+                    pass
+                    
+                logger.debug(f"显存清理完成: {input_path}")
+            except Exception as e:
+                logger.warning(f"显存清理失败: {e}")
             
             logger.info(f"文件处理完成: {input_path}")
             return str(final_output_dir)
@@ -165,6 +184,19 @@ class MinerUAPI(ls.LitAPI):
             
             raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
         finally:
+            # 异常情况下也要进行显存清理
+            try:
+                import gc
+                import torch
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+                    torch.cuda.synchronize()
+                logger.debug(f"异常处理中的显存清理完成: {input_path}")
+            except Exception as e:
+                logger.warning(f"异常处理中的显存清理失败: {e}")
+            
             # 只有创建了临时文件才需要清理
             if temp_file_created and Path(input_path).exists():
                 try:
@@ -180,7 +212,7 @@ if __name__ == '__main__':
         MinerUAPI(output_dir='/tmp/mineru_output'),
         accelerator='auto',
         devices='auto',
-        workers_per_device=1,
+        workers_per_device=3,
         timeout=False
     )
     logger.info("Starting MinerU server on port 8000")

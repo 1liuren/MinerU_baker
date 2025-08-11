@@ -48,8 +48,9 @@ async def mineru_parse_async(session, file_path, server_url='http://10.10.50.52:
             'options': options
         }
 
-        # Use the aiohttp session to send the request
-        async with session.post(server_url, json=payload) as response:
+        # Use the aiohttp session to send the request with timeout
+        timeout = aiohttp.ClientTimeout(total=600)  # 10分钟超时
+        async with session.post(server_url, json=payload, timeout=timeout) as response:
             if response.status == 200:
                 result = await response.json()
                 logger.info(f"✅ Processed: {file_path} -> {result.get('output_dir', 'N/A')}")
@@ -79,8 +80,9 @@ async def mineru_parse_by_file_path(session, file_path, server_url='http://10.10
             'options': options
         }
 
-        # 使用aiohttp session发送请求
-        async with session.post(server_url, json=payload) as response:
+        # 使用aiohttp session发送请求，设置超时
+        timeout = aiohttp.ClientTimeout(total=600)  # 10分钟超时
+        async with session.post(server_url, json=payload, timeout=timeout) as response:
             if response.status == 200:
                 result = await response.json()
                 logger.info(f"✅ Processed (file_path mode): {file_path} -> {result.get('output_dir', 'N/A')}")
