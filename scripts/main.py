@@ -9,22 +9,17 @@ import sys
 from pathlib import Path
 from loguru import logger
 
-# 添加当前目录到Python路径
-sys.path.insert(0, str(Path(__file__).parent))
-
 # 支持直接执行和模块导入两种方式
 try:
-    from config import configure_logging
-    from pdf_pipeline import OptimizedPDFPipeline
+    from .config import configure_logging
+    from .pdf_pipeline import OptimizedPDFPipeline
 except ImportError:
-    try:
-        from .config import configure_logging
-        from .pdf_pipeline import OptimizedPDFPipeline
-    except ImportError:
-        # 最后尝试从scripts包导入
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from scripts.config import configure_logging
-        from scripts.pdf_pipeline import OptimizedPDFPipeline
+    # 直接执行时使用绝对导入
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from scripts.config import configure_logging
+    from scripts.pdf_pipeline import OptimizedPDFPipeline
 
 
 def parse_args():
@@ -74,6 +69,11 @@ def parse_args():
         default="https://dashscope.aliyuncs.com/compatible-mode/v1",
         help="大模型API URL (默认: 阿里云DashScope)"
     )
+    parser.add_argument(
+        "-d", "--data-json-path",
+        default=None,
+        help="筛选合格数据的json路径(data_info.json)，仅处理ok_status为'合格'的文件"
+    )
     
     # 性能配置
     parser.add_argument(
@@ -95,44 +95,6 @@ def parse_args():
         help="同时处理的批次数量 (默认: 4)"
     )
 
-    # 多卡/分片设置
-    parser.add_argument(
-        "--gpus",
-        type=str,
-        default="",
-        help="逗号分隔的GPU索引列表，例如: 0,1,2。留空表示单卡/自动"
-    )
-
-    
-    # 健康检查配置
-    parser.add_argument(
-        "--health-preset",
-        choices=["conservative", "aggressive", "development", "production"],
-        help="健康监控预设配置"
-    )
-    parser.add_argument(
-        "--disable-auto-restart",
-        action="store_true",
-        help="禁用自动重启功能"
-    )
-    parser.add_argument(
-        "--max-restart-attempts",
-        type=int,
-        default=3,
-        help="最大重启尝试次数 (默认: 3)"
-    )
-    parser.add_argument(
-        "--restart-cooldown",
-        type=int,
-        default=60,
-        help="重启冷却时间（秒） (默认: 60)"
-    )
-    parser.add_argument(
-        "--health-check-interval",
-        type=int,
-        default=30,
-        help="健康检查间隔（秒） (默认: 30)"
-    )
     
     # 其他配置
     parser.add_argument(
@@ -145,20 +107,6 @@ def parse_args():
         "--version", 
         action="version", 
         version="PDF处理流水线 v1.0.0"
-    )
-
-    # 子进程内部使用的分片参数（不会在帮助中展示给普通用户）
-    parser.add_argument(
-        "--shard-index",
-        type=int,
-        default=None,
-        help=argparse.SUPPRESS
-    )
-    parser.add_argument(
-        "--shard-count",
-        type=int,
-        default=None,
-        help=argparse.SUPPRESS
     )
     
     return parser.parse_args()
@@ -192,14 +140,6 @@ def validate_args(args):
         logger.error("concurrent-batches 必须大于 0")
         return False
 
-    # 校验 gpus 参数格式
-    if args.gpus:
-        try:
-            _ = [int(x) for x in args.gpus.split(',') if x.strip() != ""]
-        except ValueError:
-            logger.error("--gpus 参数格式错误，应为逗号分隔的整数列表，如: 0,1,2")
-            return False
-
     
     # 检查后端配置
     if args.backend == "vlm-sglang-client" and not args.server_url:
@@ -231,174 +171,22 @@ def main():
         logger.info(f"语言: {args.lang}")
         logger.info(f"性能配置: {args.max_workers} 线程, {args.batch_size} 批次大小, {args.concurrent_batches} 并发批次")
         
-        # 是否启用脚本内自动分卡并发
-        if args.gpus:
-            import os
-            import subprocess
-            import json
-            try:
-                from health_monitor import HealthMonitor
-                from health_config import get_health_config
-            except ImportError:
-                try:
-                    from .health_monitor import HealthMonitor
-                    from .health_config import get_health_config
-                except ImportError:
-                    from scripts.health_monitor import HealthMonitor
-                    from scripts.health_config import get_health_config
-
-            gpu_list = [int(x) for x in args.gpus.split(',') if x.strip() != ""]
-            shard_count = len(gpu_list)
-
-            logger.info(f"启用脚本内多卡并发: GPUs={gpu_list}, 分片数={shard_count}")
-
-            # 获取健康监控配置
-            health_config = get_health_config(args.health_preset)
-            
-            # 应用命令行参数覆盖
-            if args.disable_auto_restart:
-                health_config.enable_auto_restart = False
-            if hasattr(args, 'max_restart_attempts'):
-                health_config.max_restart_attempts = args.max_restart_attempts
-            if hasattr(args, 'restart_cooldown'):
-                health_config.restart_cooldown = args.restart_cooldown
-            if hasattr(args, 'health_check_interval'):
-                health_config.check_interval = args.health_check_interval
-            
-            # 记录配置信息
-            health_config.log_config()
-
-            # 创建健康监控器
-            health_monitor = HealthMonitor(
-                max_restart_attempts=health_config.max_restart_attempts,
-                restart_cooldown=health_config.restart_cooldown,
-                check_interval=health_config.check_interval,
-                memory_threshold=health_config.memory_threshold,
-                enable_auto_restart=health_config.enable_auto_restart
-            )
-
-            # 启动所有子进程
-            for shard_index, gpu_id in enumerate(gpu_list):
-                env = os.environ.copy()
-                # 仅暴露当前子进程可见的GPU
-                env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-                # 同时给 MinerU 设置 device（对非CUDA环境可换成 cpu/mps 等）
-                env["MINERU_DEVICE_MODE"] = f"cuda:0"
-
-                cmd = [
-                    sys.executable,
-                    __file__,
-                    "--input", args.input,
-                    "--output", args.output,
-                    "--backend", args.backend,
-                    "--server-url", args.server_url if args.server_url else "",
-                    "--lang", args.lang,
-                    "--api-url", args.api_url,
-                    "--batch-size", str(args.batch_size),
-                    "--concurrent-batches", str(args.concurrent_batches),
-                    "--max-workers", str(args.max_workers),
-                    # 传递分片信息到子进程（子进程内不再传 --gpus）
-                    "--shard-index", str(shard_index),
-                    "--shard-count", str(shard_count)
-                ]
-                # 去掉空的 server-url 参数
-                cmd = [c for c in cmd if c != ""]
-
-                logger.info(f"启动子进程: GPU={gpu_id}, shard={shard_index+1}/{shard_count}")
-                
-                try:
-                    proc = subprocess.Popen(cmd, env=env)
-                    # 注册进程到健康监控器
-                    health_monitor.register_process(shard_index, gpu_id, cmd, proc)
-                    logger.success(f"子进程启动成功: GPU={gpu_id}, PID={proc.pid}")
-                except Exception as e:
-                    logger.error(f"启动子进程失败: GPU={gpu_id}, 错误: {e}")
-                    continue
-
-            # 启动健康监控
-            health_monitor.start_monitoring()
-            
-            try:
-                # 等待所有进程完成
-                success = health_monitor.wait_for_completion()
-                
-                # 显示最终状态
-                status = health_monitor.get_status()
-                logger.info(f"处理完成统计: 总进程={status['total_processes']}, 存活={status['alive_processes']}, 死亡={status['dead_processes']}")
-                
-            except KeyboardInterrupt:
-                logger.warning("用户中断，正在清理进程...")
-                success = False
-            finally:
-                # 停止监控并清理所有进程
-                health_monitor.stop_monitoring()
-                health_monitor.cleanup_all_processes()
-            
-            # 进程收尾后做一次全局清理
-            try:
-                import gc
-                import torch
-                from mineru.utils.config_reader import get_device
-                from mineru.utils.model_utils import clean_memory
-                
-                # 强制垃圾回收
-                gc.collect()
-                
-                # 清理所有可用GPU的显存
-                if torch.cuda.is_available():
-                    for gpu_id in range(torch.cuda.device_count()):
-                        try:
-                            with torch.cuda.device(gpu_id):
-                                torch.cuda.empty_cache()
-                                torch.cuda.ipc_collect()
-                                torch.cuda.synchronize()
-                            logger.info(f"GPU {gpu_id} 显存清理完成")
-                        except Exception as e:
-                            logger.warning(f"GPU {gpu_id} 显存清理失败: {e}")
-                
-                # 通用设备清理
-                try:
-                    device = get_device()
-                    clean_memory(device)
-                    logger.info("全局显存清理完成")
-                except Exception as e:
-                    logger.warning(f"全局显存清理失败: {e}")
-                    
-                # 调用专用内存清理
-                try:
-                    from memory_utils import cleanup_process_memory
-                    cleanup_process_memory()
-                except ImportError:
-                    try:
-                        from .memory_utils import cleanup_process_memory
-                        cleanup_process_memory()
-                    except ImportError:
-                        try:
-                            from scripts.memory_utils import cleanup_process_memory
-                            cleanup_process_memory()
-                        except ImportError:
-                            logger.warning("无法导入内存清理工具，跳过专用内存清理")
-                    
-            except Exception as e:
-                logger.warning(f"全局清理失败: {e}")
-        else:
-            # 单进程（可搭配 CUDA_VISIBLE_DEVICES 外部设置）
-            pipeline = OptimizedPDFPipeline(
-                input_dir=args.input,
-                output_dir=args.output,
-                max_workers=args.max_workers,
-                backend=args.backend,
-                server_url=args.server_url,
-                lang=args.lang,
-                api_url=args.api_url,
-                batch_size=args.batch_size,
-                concurrent_batches=args.concurrent_batches,
-                # 支持从命令行隐含传入的分片参数（被子进程用）
-                shard_index=getattr(args, "shard_index", None),
-                shard_count=getattr(args, "shard_count", None),
-            )
-
-            success = pipeline.run_pipeline()
+        # 创建并运行流水线
+        pipeline = OptimizedPDFPipeline(
+            input_dir=args.input,
+            output_dir=args.output,
+            max_workers=args.max_workers,
+            backend=args.backend,
+            server_url=args.server_url,
+            lang=args.lang,
+            api_url=args.api_url,
+            batch_size=args.batch_size,
+            concurrent_batches=args.concurrent_batches,
+            data_json_path=args.data_json_path
+        )
+        
+        # 运行流水线
+        success = pipeline.run_pipeline()
         
         if success:
             logger.success("流水线执行成功完成")

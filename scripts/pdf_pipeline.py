@@ -21,39 +21,10 @@ from typing import Dict, List, Tuple, Optional
 from tqdm import tqdm
 from loguru import logger
 
-# 添加当前目录到Python路径
-sys.path.insert(0, str(Path(__file__).parent))
-
-try:
-    from config import configure_logging, OpenAI, BookMetadata
-except ImportError:
-    from .config import configure_logging, OpenAI, BookMetadata
-
-try:
-    from status_manager import ProcessingStatus
-except ImportError:
-    from .status_manager import ProcessingStatus
-
-try:
-    from html_converter import HTMLToMarkdownConverter
-except ImportError:
-    from .html_converter import HTMLToMarkdownConverter
-
-try:
-    from utils import format_time, find_files, clean_markdown_text, extract_metadata_with_llm
-except ImportError:
-    from .utils import format_time, find_files, clean_markdown_text, extract_metadata_with_llm
-
-# 导入内存管理工具
-try:
-    from memory_utils import cleanup_process_memory, monitor_gpu_memory, setup_memory_monitoring
-except ImportError:
-    try:
-        from .memory_utils import cleanup_process_memory, monitor_gpu_memory, setup_memory_monitoring
-    except ImportError:
-        def cleanup_process_memory(): pass
-        def monitor_gpu_memory(): pass
-        def setup_memory_monitoring(): pass
+from .config import configure_logging, OpenAI, BookMetadata
+from .status_manager import ProcessingStatus
+from .html_converter import HTMLToMarkdownConverter
+from .utils import format_time, find_files, clean_markdown_text, extract_metadata_with_llm
 
 
 def process_batch_worker(batch_data):
@@ -70,32 +41,8 @@ def process_batch_worker(batch_data):
     
     batch_idx, batch_files, config = batch_data
     
-    # 设置进程级内存监控
     try:
-        setup_memory_monitoring()
-    except Exception as e:
-        logger.warning(f"进程 {os.getpid()}: 内存监控设置失败: {e}")
-    
-    # 监控初始GPU状态
-    logger.info(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 开始前GPU状态:")
-    try:
-        monitor_gpu_memory()
-    except Exception as e:
-        logger.warning(f"进程 {os.getpid()}: GPU状态监控失败: {e}")
-    
-    try:
-        # 配置子进程的日志 - 确保子进程有正确的日志配置
-        try:
-            from config import configure_logging
-        except ImportError:
-            from .config import configure_logging
-        from datetime import datetime
-        
-        # 重新配置子进程的日志
-        log_level = config.get('log_level', 'INFO')
-        # 为子进程创建独立的日志文件
-        log_file = Path(config['output_dir']) / "logs" / f"worker_{os.getpid()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        configure_logging(log_level, str(log_file))
+        # 子进程不再单独配置日志，复用主进程配置
         
         # 确保子进程有正确的环境变量
         if config.get('dashscope_api_key'):
@@ -103,12 +50,7 @@ def process_batch_worker(batch_data):
         
         # 导入必要的模块
         from mineru.cli.common import read_fn
-        from mineru.utils.config_reader import get_device
-        from mineru.utils.model_utils import clean_memory
-        try:
-            from utils import format_time
-        except ImportError:
-            from .utils import format_time
+        from .utils import format_time
         
         logger.info(f"进程 {os.getpid()}: 开始处理批次 {batch_idx + 1} ({len(batch_files)} 个文件)")
         
@@ -179,12 +121,6 @@ def process_batch_worker(batch_data):
         )
         parse_time = time.time() - parse_start_time
         logger.success(f"进程 {os.getpid()}: 批次 {batch_idx + 1} do_parse调用完成，耗时 {format_time(parse_time)}")
-
-        # 尝试在每个批次结束后主动清理一次显存/内存，缓解长期运行积累
-        try:
-            clean_memory(get_device())
-        except Exception:
-            pass
         
         # 收集处理结果 - 分阶段进行，先收集文件，再并行处理元数据
         file_contents = []
@@ -212,10 +148,7 @@ def process_batch_worker(batch_data):
                         middle_json = json.load(f)
                     
                     # 清洗markdown内容
-                    try:
-                        from utils import clean_markdown_text
-                    except ImportError:
-                        from .utils import clean_markdown_text
+                    from .utils import clean_markdown_text
                     cleaned_content = clean_markdown_text(content)
                     
                     # 移动文件到最终目录
@@ -301,52 +234,6 @@ def process_batch_worker(batch_data):
             shutil.rmtree(temp_output_dir)
         except Exception as e:
             logger.warning(f"进程 {os.getpid()}: 清理临时目录失败: {e}")
-
-        # 二次清理：释放本地引用并触发gc/显存清理
-        try:
-            del pdf_bytes_list
-            del file_contents
-            del valid_files
-        except Exception:
-            pass
-        
-        # 强制清理显存和模型缓存
-        try:
-            import gc
-            import torch
-            from mineru.utils.config_reader import get_device
-            from mineru.utils.model_utils import clean_memory
-            
-            # 强制垃圾回收
-            gc.collect()
-            
-            # 清理显存
-            device = get_device()
-            clean_memory(device)
-            
-            # 如果是CUDA设备，进行额外的显存清理
-            if torch.cuda.is_available() and str(device).startswith('cuda'):
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
-                # 强制同步，确保所有操作完成
-                torch.cuda.synchronize()
-                
-            logger.info(f"进程 {os.getpid()}: 显存清理完成")
-        except Exception as e:
-            logger.warning(f"进程 {os.getpid()}: 显存清理失败: {e}")
-        
-        # 使用专用的内存清理工具
-        try:
-            cleanup_process_memory()
-        except Exception as e:
-            logger.warning(f"进程 {os.getpid()}: 专用内存清理失败: {e}")
-        
-        # 监控清理后的GPU状态
-        logger.info(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 完成后GPU状态:")
-        try:
-            monitor_gpu_memory()
-        except Exception as e:
-            logger.warning(f"进程 {os.getpid()}: GPU状态监控失败: {e}")
         
         logger.success(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 处理完成，成功处理 {len(processed_data)} 个文件")
         return True, processed_data, parse_time  # 返回真正的批次处理时间
@@ -354,33 +241,6 @@ def process_batch_worker(batch_data):
     except Exception as e:
         logger.error(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 处理失败: {e}")
         logger.error(traceback.format_exc())
-        
-        # 异常情况下也要进行显存清理
-        try:
-            import gc
-            import torch
-            from mineru.utils.config_reader import get_device
-            from mineru.utils.model_utils import clean_memory
-            
-            gc.collect()
-            device = get_device()
-            clean_memory(device)
-            
-            if torch.cuda.is_available() and str(device).startswith('cuda'):
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
-                torch.cuda.synchronize()
-                
-            logger.info(f"进程 {os.getpid()}: 异常后显存清理完成")
-        except Exception as cleanup_e:
-            logger.warning(f"进程 {os.getpid()}: 异常后显存清理失败: {cleanup_e}")
-        
-        # 异常情况下也使用专用的内存清理工具
-        try:
-            cleanup_process_memory()
-        except Exception as e:
-            logger.warning(f"进程 {os.getpid()}: 异常后专用内存清理失败: {e}")
-            
         # 如果parse_time未定义，使用0作为默认值
         parse_time = locals().get('parse_time', 0)
         return False, [], parse_time
@@ -393,7 +253,7 @@ class OptimizedPDFPipeline:
                  backend: str = "vlm-sglang-client", server_url: str = None,
                  lang: str = "ch", api_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
                  batch_size: int = 100, concurrent_batches: int = 4,
-                 shard_index: Optional[int] = None, shard_count: Optional[int] = None):
+                 data_json_path: Optional[str] = None):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.max_workers = max_workers
@@ -403,8 +263,7 @@ class OptimizedPDFPipeline:
         self.api_url = api_url
         self.batch_size = batch_size
         self.concurrent_batches = concurrent_batches
-        self.shard_index = shard_index
-        self.shard_count = shard_count
+        self.data_json_path = data_json_path
 
         # 创建输出目录结构
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -434,8 +293,6 @@ class OptimizedPDFPipeline:
         logger.info(f"Server URL: {self.server_url}")
         logger.info(f"Language: {self.lang}")
         logger.info(f"Max Workers: {self.max_workers}")
-        if self.shard_index is not None and self.shard_count is not None:
-            logger.info(f"Shard: {self.shard_index+1}/{self.shard_count}")
 
     def convert_epub_to_pdf(self) -> bool:
         """转换EPUB文件为PDF"""
@@ -474,6 +331,13 @@ class OptimizedPDFPipeline:
             pdf_files.extend(converted_dir.rglob("*.pdf"))
         
         pdf_files = sorted(set(pdf_files))
+
+        # 基于数据筛选文件（ok_status == "合格"）
+        ok_stems = self._load_ok_file_stems(self.data_json_path)
+        if ok_stems:
+            before_cnt = len(pdf_files)
+            pdf_files = [p for p in pdf_files if p.stem in ok_stems]
+            logger.info(f"按过滤表筛选: {before_cnt} -> {len(pdf_files)}")
         
         if not pdf_files:
             logger.error("未找到PDF文件")
@@ -481,13 +345,7 @@ class OptimizedPDFPipeline:
         
         logger.info(f"找到 {len(pdf_files)} 个PDF文件，使用批量处理模式...")
         logger.info("服务端自动处理多进程，无需客户端多线程")
-
-        # 按分片过滤文件
-        if self.shard_index is not None and self.shard_count is not None and self.shard_count > 1:
-            files_sharded = [f for idx, f in enumerate(pdf_files) if idx % self.shard_count == self.shard_index]
-            logger.info(f"分片过滤后: {len(files_sharded)}/{len(pdf_files)} 个文件将由当前分片处理")
-            pdf_files = files_sharded
-
+        
         return self._process_with_batch_mode(pdf_files)
     
     def _process_with_batch_mode(self, pdf_files: List[Path]) -> Tuple[bool, List[Dict]]:
@@ -540,7 +398,7 @@ class OptimizedPDFPipeline:
 
     
     def _process_batches_multiprocess(self, batches: List[List[Path]]) -> Tuple[bool, List[Dict]]:
-        """使用多进程处理多个批次（带健康监控）"""
+        """使用多进程处理多个批次"""
         all_processed_data = []
         total_success = 0
         
@@ -563,116 +421,58 @@ class OptimizedPDFPipeline:
         
         logger.info(f"使用多进程处理 {len(batches)} 个批次，最大进程数: {self.concurrent_batches}")
         
-        # 导入子进程健康监控
-        try:
-            from subprocess_health_monitor import SubprocessHealthMonitor
-            
-            # 创建健康监控器
-            monitor_config = {
-                'check_interval': 30.0,  # 30秒检查一次
-                'memory_threshold_mb': 8192.0,  # 8GB内存阈值
-                'cpu_threshold_percent': 95.0,  # 95% CPU阈值
-                'timeout_minutes': 120.0,  # 2小时超时
-                'max_restart_attempts': 2,
-                'restart_cooldown': 60.0
-            }
-            
-            health_monitor = SubprocessHealthMonitor(**monitor_config)
-            logger.info("子进程健康监控已启用")
-            
-        except ImportError as e:
-            logger.warning(f"无法导入子进程健康监控: {e}，将使用基本模式")
-            health_monitor = None
-        
         # 使用进程池处理批次
         with ProcessPoolExecutor(max_workers=self.concurrent_batches) as executor:
-            # 启动健康监控
-            if health_monitor:
-                health_monitor.start_monitoring(executor)
+            # 提交所有批次任务
+            future_to_batch = {}
             
-            try:
-                # 提交所有批次任务
-                future_to_batch = {}
-                
-                for i, batch_data in enumerate(batch_data_list):
-                    future = executor.submit(process_batch_worker, batch_data)
-                    future_to_batch[future] = (i, batch_data[1])
+            for i, batch_data in enumerate(batch_data_list):
+                future = executor.submit(process_batch_worker, batch_data)
+                future_to_batch[future] = (i, batch_data[1])
+            
+            # 收集结果
+            with tqdm(total=len(batches), desc="处理批次", unit="批次") as pbar:
+                for future in as_completed(future_to_batch):
+                    batch_idx, batch_files = future_to_batch[future]
                     
-                    # 注册到健康监控
-                    if health_monitor:
-                        health_monitor.register_subprocess(future, i, batch_data[1])
-                
-                # 收集结果
-                with tqdm(total=len(batches), desc="处理批次", unit="批次") as pbar:
-                    for future in as_completed(future_to_batch):
-                        batch_idx, batch_files = future_to_batch[future]
-                        
-                        try:
-                            success, data, parse_time = future.result()  # 接收真正的批次处理时间
-                            if success:
-                                all_processed_data.extend(data)
-                                total_success += len(data)
-                                # 更新处理状态
-                                for item in data:
-                                    pdf_file = item["pdf_file"]
-                                    self.status.mark_processed(
-                                        str(pdf_file), 
-                                        "pdf_processing", 
-                                        parse_time,  # 使用真正的批次处理时间
-                                        success=True
-                                    )
-                            else:
-                                # 标记批次中的文件为失败
-                                for pdf_file in batch_files:
-                                    self.status.mark_processed(
-                                        str(pdf_file), 
-                                        "pdf_processing", 
-                                        parse_time,  # 使用真正的批次处理时间
-                                        success=False, 
-                                        error_msg="批次处理失败"
-                                    )
-                            pbar.set_postfix({"成功": total_success})
-                        except Exception as e:
-                            logger.error(f"批次 {batch_idx + 1} 处理异常: {e}")
-                            # 标记批次中的文件为失败，使用默认时间0
+                    try:
+                        success, data, parse_time = future.result()  # 接收真正的批次处理时间
+                        if success:
+                            all_processed_data.extend(data)
+                            total_success += len(data)
+                            # 更新处理状态
+                            for item in data:
+                                pdf_file = item["pdf_file"]
+                                self.status.mark_processed(
+                                    str(pdf_file), 
+                                    "pdf_processing", 
+                                    parse_time,  # 使用真正的批次处理时间
+                                    success=True
+                                )
+                        else:
+                            # 标记批次中的文件为失败
                             for pdf_file in batch_files:
                                 self.status.mark_processed(
                                     str(pdf_file), 
                                     "pdf_processing", 
-                                    0,  # 异常情况下使用默认时间
+                                    parse_time,  # 使用真正的批次处理时间
                                     success=False, 
-                                    error_msg=f"处理异常: {e}"
+                                    error_msg="批次处理失败"
                                 )
-                        finally:
-                            pbar.update(1)
-                            
-                            # 定期输出健康监控报告
-                            if health_monitor and (batch_idx + 1) % 5 == 0:  # 每5个批次输出一次
-                                try:
-                                    report = health_monitor.get_status_report()
-                                    logger.info(f"健康监控报告: 活跃进程={report['active_processes']}, "
-                                              f"平均内存={report['avg_memory_mb']:.1f}MB, "
-                                              f"完成={report['stats']['completed_processes']}, "
-                                              f"失败={report['stats']['failed_processes']}")
-                                except Exception as monitor_e:
-                                    logger.debug(f"获取健康监控报告失败: {monitor_e}")
-            
-            finally:
-                # 清理健康监控
-                if health_monitor:
-                    try:
-                        # 输出最终报告
-                        final_report = health_monitor.get_status_report()
-                        logger.info("最终健康监控报告:")
-                        logger.info(f"  总进程数: {final_report['stats']['total_processes']}")
-                        logger.info(f"  完成进程: {final_report['stats']['completed_processes']}")
-                        logger.info(f"  失败进程: {final_report['stats']['failed_processes']}")
-                        logger.info(f"  OOM终止: {final_report['stats']['oom_kills']}")
-                        logger.info(f"  超时终止: {final_report['stats']['timeout_kills']}")
-                        
-                        health_monitor.cleanup()
+                        pbar.set_postfix({"成功": total_success})
                     except Exception as e:
-                        logger.warning(f"清理健康监控失败: {e}")
+                        logger.error(f"批次 {batch_idx + 1} 处理异常: {e}")
+                        # 标记批次中的文件为失败，使用默认时间0
+                        for pdf_file in batch_files:
+                            self.status.mark_processed(
+                                str(pdf_file), 
+                                "pdf_processing", 
+                                0,  # 异常情况下使用默认时间
+                                success=False, 
+                                error_msg=f"处理异常: {e}"
+                            )
+                    finally:
+                        pbar.update(1)
         
         logger.success(f"所有批次处理完成，总共成功处理 {total_success} 个文件")
         return total_success > 0, all_processed_data
@@ -800,8 +600,6 @@ class OptimizedPDFPipeline:
         logger.info(f"输出目录: {self.output_dir}")
         logger.info(f"最大线程数: {self.max_workers}")
         logger.info(f"处理后端: {self.backend}")
-        if self.shard_index is not None and self.shard_count is not None:
-            logger.info(f"当前分片: {self.shard_index+1}/{self.shard_count}")
         
         start_time = time.time()
         
