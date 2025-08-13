@@ -293,6 +293,55 @@ class OptimizedPDFPipeline:
         logger.info(f"Server URL: {self.server_url}")
         logger.info(f"Language: {self.lang}")
         logger.info(f"Max Workers: {self.max_workers}")
+    def _load_ok_file_stems(self, filter_json_path: str | None = None) -> set[str] | None:
+        """从data_info.json加载允许处理的文件stem集合（ok_status == '合格'）。
+
+        支持两种位置：显式传入的路径，或默认的项目内路径 data/data_info.json。
+        返回None表示未启用过滤或加载失败。
+        """
+        try:
+            from pathlib import Path
+            import json
+            p = Path(filter_json_path) if filter_json_path else (Path(__file__).parent / "data" / "data_info.json")
+            if not p.exists():
+                logger.info(f"未找到过滤文件: {p}，跳过过滤")
+                return None
+            # 读取
+            text = p.read_text(encoding="utf-8", errors="ignore")
+            ok_stems: set[str] = set()
+            data = None
+            try:
+                data = json.loads(text)
+            except Exception:
+                # 尝试按JSONL逐行解析
+                lines = [ln for ln in text.splitlines() if ln.strip()]
+                items = []
+                for ln in lines:
+                    try:
+                        items.append(json.loads(ln))
+                    except Exception:
+                        continue
+                data = items
+            if not isinstance(data, list):
+                logger.warning("过滤文件格式异常，期待list/JSONL，已跳过过滤")
+                return None
+            for item in data:
+                try:
+                    file_path = str(item.get("file_path", "")).strip()
+                    ok_status = str(item.get("ok_status", "")).strip()
+                    if not file_path:
+                        continue
+                    if ok_status == "合格":
+                        stem = Path(file_path).stem
+                        if stem:
+                            ok_stems.add(stem)
+                except Exception:
+                    continue
+            logger.info(f"过滤表已加载，可处理文件数: {len(ok_stems)} (依据 ok_status=='合格')")
+            return ok_stems
+        except Exception as e:
+            logger.warning(f"加载过滤文件失败: {e}")
+            return None
 
     def convert_epub_to_pdf(self) -> bool:
         """转换EPUB文件为PDF"""
