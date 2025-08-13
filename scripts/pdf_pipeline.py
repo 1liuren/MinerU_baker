@@ -201,7 +201,7 @@ def process_batch_worker(batch_data):
                     with open(metadata_file, 'w', encoding='utf-8') as f:
                         json.dump(metadata, f, ensure_ascii=False, indent=2)
                     
-                    logger.debug(f"进程 {os.getpid()}: batch {batch_idx + 1} 元数据提取成功 {file_info['pdf_file'].name}")
+                    # logger.info(f"进程 {os.getpid()}: batch {batch_idx + 1} 元数据提取成功 {file_info['pdf_file'].name}")
                     return file_info, metadata, None
                 except Exception as e:
                     logger.error(f"进程 {os.getpid()}: 元数据提取失败 {file_info['pdf_file'].name}: {e}")
@@ -231,7 +231,7 @@ def process_batch_worker(batch_data):
                         "idx": file_info["idx"]
                     })
             
-            # logger.info(f"进程 {os.getpid()}: 元数据提取完成，处理了 {len(file_contents)} 个文件")
+            logger.success(f"进程 {os.getpid()}: 元数据提取完成，处理了 {len(file_contents)} 个文件")
         
         # 清理临时目录
         try:
@@ -296,52 +296,58 @@ class OptimizedPDFPipeline:
         logger.info(f"Server URL: {self.server_url}")
         logger.info(f"Language: {self.lang}")
         logger.info(f"Max Workers: {self.max_workers}")
-    def _load_ok_file_stems(self, filter_json_path: str | None = None) -> set[str] | None:
-        """从data_info.json加载允许处理的文件stem集合（ok_status == '合格'）。
+    def _load_ok_file_stems(self, filter_json_path=None):
+        """从一个或多个JSON文件加载允许处理的文件stem集合（ok_status == '合格'）。仅支持标准JSON列表。
 
-        支持两种位置：显式传入的路径，或默认的项目内路径 data/data_info.json。
-        返回None表示未启用过滤或加载失败。
+        支持形式：
+        - None: 使用默认 data/data_info.json
+        - 字符串: 单个路径，或逗号分隔的多个路径
+        - 列表/元组: 多个路径
         """
         try:
             from pathlib import Path
             import json
-            p = Path(filter_json_path) if filter_json_path else (Path(__file__).parent / "data" / "data_info.json")
-            if not p.exists():
-                logger.info(f"未找到过滤文件: {p}，跳过过滤")
-                return None
-            # 读取
-            text = p.read_text(encoding="utf-8", errors="ignore")
+
+            # 归一为路径列表
+            if filter_json_path is None:
+                paths = [Path(__file__).parent / "data" / "data_info.json"]
+            elif isinstance(filter_json_path, (list, tuple)):
+                paths = [Path(p) for p in filter_json_path]
+            elif isinstance(filter_json_path, str) and "," in filter_json_path:
+                paths = [Path(p.strip()) for p in filter_json_path.split(",") if p.strip()]
+            else:
+                paths = [Path(str(filter_json_path))]
+
             ok_stems: set[str] = set()
-            data = None
-            try:
-                data = json.loads(text)
-            except Exception:
-                # 尝试按JSONL逐行解析
-                lines = [ln for ln in text.splitlines() if ln.strip()]
-                items = []
-                for ln in lines:
+            any_found = False
+
+            for p in paths:
+                if not p.exists():
+                    logger.info(f"未找到过滤文件: {p}")
+                    continue
+                any_found = True
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8", errors="ignore"))
+                except Exception as e:
+                    logger.warning(f"过滤文件解析失败(非标准JSON列表): {p}, err={e}")
+                    continue
+                if not isinstance(data, list):
+                    logger.warning(f"过滤文件格式异常(非list): {p}")
+                    continue
+                for item in data:
                     try:
-                        items.append(json.loads(ln))
+                        file_path = str(item.get("file_path", "")).strip()
+                        ok_status = str(item.get("ok_status", "")).strip()
+                        if file_path and ok_status == "合格":
+                            ok_stems.add(Path(file_path).stem)
                     except Exception:
                         continue
-                data = items
-            if not isinstance(data, list):
-                logger.warning("过滤文件格式异常，期待list/JSONL，已跳过过滤")
+
+            if not any_found:
+                logger.info("未找到任何有效的过滤文件，跳过过滤")
                 return None
-            for item in data:
-                try:
-                    file_path = str(item.get("file_path", "")).strip()
-                    ok_status = str(item.get("ok_status", "")).strip()
-                    if not file_path:
-                        continue
-                    if ok_status == "合格":
-                        stem = Path(file_path).stem
-                        if stem:
-                            ok_stems.add(stem)
-                except Exception:
-                    continue
-            logger.info(f"过滤表已加载，可处理文件数: {len(ok_stems)} (依据 ok_status=='合格')")
-            return ok_stems
+            logger.info(f"过滤表已加载(合并多文件)，可处理文件数: {len(ok_stems)}")
+            return ok_stems if ok_stems else None
         except Exception as e:
             logger.warning(f"加载过滤文件失败: {e}")
             return None

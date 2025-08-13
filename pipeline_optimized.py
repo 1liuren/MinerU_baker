@@ -327,52 +327,63 @@ class OptimizedPDFPipeline:
         final_text = re.sub(r'\n{2,}', '\n', final_text)
         return final_text.strip()
 
-    def _load_ok_file_stems(self, filter_json_path: str | None = None) -> set[str] | None:
-        """从data_info.json加载允许处理的文件stem集合（ok_status == '合格'）。
+    def _load_ok_file_stems(self, filter_json_path: str | list[str] | None = None) -> set[str] | None:
+        """从一个或多个 JSON 文件加载允许处理的文件stem集合（ok_status == '合格'）。
 
-        支持两种位置：显式传入的路径，或默认的项目内路径 data/data_info.json。
-        返回None表示未启用过滤或加载失败。
+        仅支持标准 JSON 列表，不再解析 JSONL。
+        - filter_json_path 可为: None | 单个路径 | 路径列表
+        - None 时使用默认 data/data_info.json
+        - 返回None表示未启用过滤或加载失败
         """
         try:
             from pathlib import Path
             import json
-            p = Path(filter_json_path) if filter_json_path else (Path(__file__).parent / "data" / "data_info.json")
-            if not p.exists():
-                logger.info(f"未找到过滤文件: {p}，跳过过滤")
-                return None
-            # 读取
-            text = p.read_text(encoding="utf-8", errors="ignore")
+            # 归一化为路径列表
+            if filter_json_path is None:
+                paths = [Path(__file__).parent / "data" / "data_info.json"]
+            elif isinstance(filter_json_path, (list, tuple)):
+                paths = [Path(p) for p in filter_json_path]
+            else:
+                paths = [Path(filter_json_path)]
+
             ok_stems: set[str] = set()
-            data = None
-            try:
-                data = json.loads(text)
-            except Exception:
-                # 尝试按JSONL逐行解析
-                lines = [ln for ln in text.splitlines() if ln.strip()]
-                items = []
-                for ln in lines:
+            any_found = False
+
+            def load_one_file(p: Path) -> list | None:
+                if not p.exists():
+                    logger.info(f"未找到过滤文件: {p}")
+                    return None
+                try:
+                    return json.loads(p.read_text(encoding="utf-8", errors="ignore"))
+                except Exception as e:
+                    logger.warning(f"过滤文件解析失败(非标准JSON列表): {p}, err={e}")
+                    return None
+
+            for p in paths:
+                data = load_one_file(p)
+                if data is None:
+                    continue
+                any_found = True
+                if not isinstance(data, list):
+                    logger.warning(f"过滤文件格式异常(非list/JSONL): {p}")
+                    continue
+                for item in data:
                     try:
-                        items.append(json.loads(ln))
+                        file_path = str(item.get("file_path", "")).strip()
+                        ok_status = str(item.get("ok_status", "")).strip()
+                        if file_path and ok_status == "合格":
+                            stem = Path(file_path).stem
+                            if stem:
+                                ok_stems.add(stem)
                     except Exception:
                         continue
-                data = items
-            if not isinstance(data, list):
-                logger.warning("过滤文件格式异常，期待list/JSONL，已跳过过滤")
+
+            if not any_found:
+                logger.info("未找到任何有效的过滤文件，跳过过滤")
                 return None
-            for item in data:
-                try:
-                    file_path = str(item.get("file_path", "")).strip()
-                    ok_status = str(item.get("ok_status", "")).strip()
-                    if not file_path:
-                        continue
-                    if ok_status == "合格":
-                        stem = Path(file_path).stem
-                        if stem:
-                            ok_stems.add(stem)
-                except Exception:
-                    continue
-            logger.info(f"过滤表已加载，可处理文件数: {len(ok_stems)} (依据 ok_status=='合格')")
-            return ok_stems
+
+            logger.info(f"过滤表已加载(合并多文件)，可处理文件数: {len(ok_stems)}")
+            return ok_stems if ok_stems else None
         except Exception as e:
             logger.warning(f"加载过滤文件失败: {e}")
             return None
