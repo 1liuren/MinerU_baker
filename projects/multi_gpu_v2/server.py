@@ -8,7 +8,7 @@ from loguru import logger
 
 # from mineru.cli.common import do_parse, read_fn
 from mineru.cli.common import read_fn
-from demo.demo import do_parse
+from demo import do_parse
 from mineru.utils.config_reader import get_device
 from mineru.utils.model_utils import get_vram
 from _config_endpoint import config_endpoint

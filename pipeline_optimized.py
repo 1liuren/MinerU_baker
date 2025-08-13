@@ -211,7 +211,8 @@ class OptimizedPDFPipeline:
     def __init__(self, input_dir: str, output_dir: str, max_workers: int = 4,
                  backend: str = "vlm-sglang-client", server_url: str = None,
                  lang: str = "ch", api_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                 batch_size: int = 100, concurrent_batches: int = 4):
+                 batch_size: int = 100, concurrent_batches: int = 4,
+                 data_json_path: str = None):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.max_workers = max_workers
@@ -221,7 +222,7 @@ class OptimizedPDFPipeline:
         self.api_url = api_url
         self.batch_size = batch_size
         self.concurrent_batches = concurrent_batches
-
+        self.data_json_path = data_json_path
         
         # 创建输出目录结构
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -326,6 +327,56 @@ class OptimizedPDFPipeline:
         final_text = '\n'.join(cleaned_lines)
         final_text = re.sub(r'\n{2,}', '\n', final_text)
         return final_text.strip()
+
+    def _load_ok_file_stems(self, filter_json_path: str | None = None) -> set[str] | None:
+        """从data_info.json加载允许处理的文件stem集合（ok_status == '合格'）。
+
+        支持两种位置：显式传入的路径，或默认的项目内路径 data/data_info.json。
+        返回None表示未启用过滤或加载失败。
+        """
+        try:
+            from pathlib import Path
+            import json
+            p = Path(filter_json_path) if filter_json_path else (Path(__file__).parent / "data" / "data_info.json")
+            if not p.exists():
+                logger.info(f"未找到过滤文件: {p}，跳过过滤")
+                return None
+            # 读取
+            text = p.read_text(encoding="utf-8", errors="ignore")
+            ok_stems: set[str] = set()
+            data = None
+            try:
+                data = json.loads(text)
+            except Exception:
+                # 尝试按JSONL逐行解析
+                lines = [ln for ln in text.splitlines() if ln.strip()]
+                items = []
+                for ln in lines:
+                    try:
+                        items.append(json.loads(ln))
+                    except Exception:
+                        continue
+                data = items
+            if not isinstance(data, list):
+                logger.warning("过滤文件格式异常，期待list/JSONL，已跳过过滤")
+                return None
+            for item in data:
+                try:
+                    file_path = str(item.get("file_path", "")).strip()
+                    ok_status = str(item.get("ok_status", "")).strip()
+                    if not file_path:
+                        continue
+                    if ok_status == "合格":
+                        stem = Path(file_path).stem
+                        if stem:
+                            ok_stems.add(stem)
+                except Exception:
+                    continue
+            logger.info(f"过滤表已加载，可处理文件数: {len(ok_stems)} (依据 ok_status=='合格')")
+            return ok_stems
+        except Exception as e:
+            logger.warning(f"加载过滤文件失败: {e}")
+            return None
     
     def extract_metadata_with_llm(self, text: str) -> Dict:
         """使用大模型提取元数据"""
@@ -429,6 +480,13 @@ class OptimizedPDFPipeline:
         
         pdf_files = sorted(set(pdf_files))
         
+        # 基于data_info.json进行过滤（仅处理ok_status=="合格"的文件）
+        ok_stems = self._load_ok_file_stems(self.data_json_path)
+        if ok_stems:
+            before_cnt = len(pdf_files)
+            pdf_files = [p for p in pdf_files if p.stem in ok_stems]
+            logger.info(f"按过滤表筛选: {before_cnt} -> {len(pdf_files)}")
+
         if not pdf_files:
             logger.error("未找到PDF文件")
             return False, []
@@ -655,13 +713,6 @@ class OptimizedPDFPipeline:
 
                 results_abs_dir = str(self.results_dir.resolve())
 
-            #  # 动态导入异步客户端
-            #  import importlib.util as _importlib_util
-            #  client_path = Path(__file__).parent / "projects" / "multi_gpu_v2" / "client.py"
-            #  spec_client = _importlib_util.spec_from_file_location("mclient", client_path)
-            #  mclient = _importlib_util.module_from_spec(spec_client)
-            #  spec_client.loader.exec_module(mclient)
-            #  mineru_parse_async = getattr(mclient, "mineru_parse_async")
                 from projects.multi_gpu_v2.client import mineru_parse_by_file_path
 
 
@@ -897,7 +948,7 @@ class OptimizedPDFPipeline:
             logger.success(f"批次 {batch_idx + 1} 完成: {success_count}/{len(batch_files)} 个文件成功，总耗时 {self.format_time(batch_total_time)}")
             logger.info(f"批次 {batch_idx + 1} 耗时详情:")
             logger.info(f"  - 文件读取: {self.format_time(read_total_time)} ({read_total_time/batch_total_time*100:.1f}%)")
-            logger.info(f"  - PDF处理: {self.format_time(parse_time)} ({parse_time/batch_total_time*100:.1f}%)")
+            logger.info(f"  - PDF处理: {self.format_time(process_time)} ({process_time/batch_total_time*100:.1f}%)")
             logger.info(f"  - 文件收集: {self.format_time(collect_files_time)} ({collect_files_time/batch_total_time*100:.1f}%)")
             if 'metadata_time' in locals():
                 logger.info(f"  - 元数据提取: {self.format_time(metadata_time)} ({metadata_time/batch_total_time*100:.1f}%)")
@@ -1134,10 +1185,11 @@ MinerU集成版特性:
                        help="每个批次处理的PDF文件数量 (默认: 100)")
     parser.add_argument("--concurrent-batches", type=int, default=1,
                        help="同时处理的批次数量 (默认: 4)")
-    # 移除 --max-files-per-call 参数
     parser.add_argument("--log-level", default="INFO",
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                        help="日志级别 (默认: INFO)")
+    parser.add_argument("-d","--data_json_path", default=None,
+                       help="合格数据筛选json路径")
     
     args = parser.parse_args()
     
@@ -1169,7 +1221,8 @@ MinerU集成版特性:
             lang=args.lang,
             api_url=args.api_url,
             batch_size=args.batch_size,
-            concurrent_batches=args.concurrent_batches
+            concurrent_batches=args.concurrent_batches,
+            data_json_path=args.data_json_path
         )
         
         success = pipeline.run_pipeline()
