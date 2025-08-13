@@ -136,10 +136,10 @@ def extract_metadata_with_llm(text: str, api_url: str) -> Dict:
         logger.error("DASHSCOPE_API_KEY环境变量未设置")
         return {}
     
-    logger.info(f"API密钥已获取，长度: {len(api_key)}")
+    # logger.info(f"API密钥已获取，长度: {len(api_key)}")
     
     try:
-        logger.info("正在创建OpenAI客户端...")
+        # logger.info("正在创建OpenAI客户端...")
         client = OpenAI(
             base_url=api_url,
             api_key=api_key
@@ -169,7 +169,7 @@ def extract_metadata_with_llm(text: str, api_url: str) -> Dict:
 请只输出标准 JSON 字符串，不要添加说明或注释。
 """
         
-        logger.info("正在调用大模型API...")
+        # logger.info("正在调用大模型API...")
         response = client.chat.completions.create(
             model="qwen-max-latest",
             messages=[
@@ -181,7 +181,7 @@ def extract_metadata_with_llm(text: str, api_url: str) -> Dict:
             temperature=0.3,
             extra_body={"enable_thinking": False},
         )
-        logger.info("API调用成功")
+        # logger.info("API调用成功")
         
         content = response.choices[0].message.content.strip()
         # 清理可能的markdown包装

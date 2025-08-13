@@ -52,7 +52,7 @@ class ProcessingStatus:
     def is_processed(self, file_path: str, task_type: str = "default") -> bool:
         """检查文件是否已处理"""
         with self.lock:
-            file_key = f"{str(Path(file_path).resolve())}_{task_type}"
+            file_key = f"{str(Path(file_path).resolve())}"
             # 检查文件是否在已处理列表中，并且处理成功
             return (file_key in self.status_data["processed_files"] and 
                    self.status_data["processed_files"][file_key]["success"])
@@ -60,14 +60,13 @@ class ProcessingStatus:
     def mark_processed(self, file_path: str, task_type: str, processing_time: float, success: bool = True, error_msg: str = None):
         """标记文件处理状态"""
         with self.lock:
-            file_key = f"{str(Path(file_path).resolve())}_{task_type}"
+            file_key = f"{str(Path(file_path).resolve())}"
             
             self.status_data["processed_files"][file_key] = {
                 "timestamp": datetime.now().isoformat(),
                 "processing_time": processing_time,
                 "success": success,
                 "error": error_msg if not success else None,
-                "task_type": task_type
             }
             
             if success:

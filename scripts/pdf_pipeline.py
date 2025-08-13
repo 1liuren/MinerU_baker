@@ -148,6 +148,10 @@ def process_batch_worker(batch_data):
                         middle_json = json.load(f)
                     
                     # 清洗markdown内容
+                    try:
+                        content = HTMLToMarkdownConverter.convert_html_in_text(content)
+                    except Exception:
+                        pass
                     from .utils import clean_markdown_text
                     cleaned_content = clean_markdown_text(content)
                     
@@ -179,7 +183,7 @@ def process_batch_worker(batch_data):
         # 第二阶段：使用线程池并行处理元数据
         processed_data = []
         if file_contents:
-            logger.info(f"进程 {os.getpid()}: 开始并行提取 {len(file_contents)} 个文件的元数据")
+            logger.info(f"进程 {os.getpid()} batch {batch_idx + 1}: 开始提取 {len(file_contents)} 个文件的元数据")
             
             def extract_metadata_for_file(file_info):
                 """为单个文件提取元数据"""
@@ -197,7 +201,7 @@ def process_batch_worker(batch_data):
                     with open(metadata_file, 'w', encoding='utf-8') as f:
                         json.dump(metadata, f, ensure_ascii=False, indent=2)
                     
-                    logger.debug(f"进程 {os.getpid()}: 元数据提取成功 {file_info['pdf_file'].name}")
+                    logger.debug(f"进程 {os.getpid()}: batch {batch_idx + 1} 元数据提取成功 {file_info['pdf_file'].name}")
                     return file_info, metadata, None
                 except Exception as e:
                     logger.error(f"进程 {os.getpid()}: 元数据提取失败 {file_info['pdf_file'].name}: {e}")
@@ -227,7 +231,7 @@ def process_batch_worker(batch_data):
                         "idx": file_info["idx"]
                     })
             
-            logger.info(f"进程 {os.getpid()}: 元数据提取完成，处理了 {len(file_contents)} 个文件")
+            # logger.info(f"进程 {os.getpid()}: 元数据提取完成，处理了 {len(file_contents)} 个文件")
         
         # 清理临时目录
         try:
@@ -235,7 +239,6 @@ def process_batch_worker(batch_data):
         except Exception as e:
             logger.warning(f"进程 {os.getpid()}: 清理临时目录失败: {e}")
         
-        logger.success(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 处理完成，成功处理 {len(processed_data)} 个文件")
         return True, processed_data, parse_time  # 返回真正的批次处理时间
         
     except Exception as e:
