@@ -69,6 +69,7 @@ def parse_args():
         default="https://dashscope.aliyuncs.com/compatible-mode/v1",
         help="大模型API URL (默认: 阿里云DashScope)"
     )
+    # -d "/path/a.json,/path/b.json" 或 -d "/path/a.json"
     parser.add_argument(
         "-d", "--data-json-path",
         default=None,

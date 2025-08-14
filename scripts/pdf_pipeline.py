@@ -318,6 +318,18 @@ class OptimizedPDFPipeline:
             else:
                 paths = [Path(str(filter_json_path))]
 
+            # 若传入为目录，则自动定位到该目录下的 data_info.json
+            normalized_paths: list[Path] = []
+            for p in paths:
+                try:
+                    if p.is_dir():
+                        normalized_paths.append(p / "data_info.json")
+                    else:
+                        normalized_paths.append(p)
+                except Exception:
+                    normalized_paths.append(p)
+            paths = normalized_paths
+
             ok_stems: set[str] = set()
             any_found = False
 
@@ -382,13 +394,21 @@ class OptimizedPDFPipeline:
         # 查找所有PDF文件
         pdf_files = []
         pdf_files.extend(find_files(self.input_dir, ['pdf']))
-        
+
         # 添加转换后的PDF文件
         converted_dir = self.input_dir / "converted_pdfs"
         if converted_dir.exists():
             pdf_files.extend(converted_dir.rglob("*.pdf"))
-        
-        pdf_files = sorted(set(pdf_files))
+
+        # 按文件名去重（仅保留首个出现的路径）
+        seen_stems = set()
+        unique_pdf_files = []
+        for p in pdf_files:
+            stem = p.stem
+            if stem not in seen_stems:
+                seen_stems.add(stem)
+                unique_pdf_files.append(p)
+        pdf_files = unique_pdf_files
 
         # 基于数据筛选文件（ok_status == "合格"）
         ok_stems = self._load_ok_file_stems(self.data_json_path)
