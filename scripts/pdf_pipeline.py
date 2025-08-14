@@ -318,12 +318,14 @@ class OptimizedPDFPipeline:
             else:
                 paths = [Path(str(filter_json_path))]
 
-            # 若传入为目录，则自动定位到该目录下的 data_info.json
+            # 若传入为目录，则递归查找目录下所有的data_info.json
             normalized_paths: list[Path] = []
             for p in paths:
                 try:
                     if p.is_dir():
-                        normalized_paths.append(p / "data_info.json")
+                        # 递归查找所有data_info.json文件
+                        for json_file in p.rglob("data_info.json"):
+                            normalized_paths.append(json_file)
                     else:
                         normalized_paths.append(p)
                 except Exception:
