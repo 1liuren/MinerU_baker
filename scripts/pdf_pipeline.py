@@ -443,10 +443,24 @@ class OptimizedPDFPipeline:
         
         with tqdm(pdf_files, desc="检查文件状态", unit="文件") as pbar:
             for pdf_file in pbar:
+                # 检查状态文件中的处理记录
                 if self.status.is_processed(str(pdf_file), "pdf_processing"):
-                    logger.debug(f"跳过已处理文件: {pdf_file.name}")
+                    logger.debug(f"跳过已处理文件(状态记录): {pdf_file.name}")
                     self.status.status_data["processing_stats"]["skipped"] += 1
                     continue
+                
+                # 检查results目录下是否已存在对应的输出目录
+                output_dir = self.results_dir / pdf_file.stem
+                if output_dir.exists() and output_dir.is_dir():
+                    # 进一步检查必要的输出文件是否存在
+                    md_file = output_dir / f"{pdf_file.stem}.md"
+                    middle_json = output_dir / f"{pdf_file.stem}_middle.json"
+                    extracted_metadata_file = output_dir / f"{pdf_file.stem}_extracted_metadata.json"
+                    if md_file.exists() and middle_json.exists() and extracted_metadata_file.exists():
+                        logger.debug(f"跳过已处理文件(输出存在): {pdf_file.name}")
+                        self.status.status_data["processing_stats"]["skipped"] += 1
+                        continue
+                
                 files_to_process.append(pdf_file)
         
         if not files_to_process:
