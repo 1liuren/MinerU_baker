@@ -240,7 +240,7 @@ def process_batch_worker(batch_data):
         try:
             import gc
             del file_name_list, pdf_bytes_list, lang_list, valid_files
-            del file_contents, processed_data
+            del file_contents
             gc.collect()
         except Exception:
             pass
