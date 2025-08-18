@@ -552,6 +552,7 @@ class OptimizedPDFPipeline:
                                     success=False,
                                     error_msg="批次处理失败",
                                 )
+                        pbar.set_postfix({"成功": total_success})
                     except Exception as e:
                         logger.error(f"批次 {batch_idx + 1} 处理异常: {e}")
                         for pdf_file in batch_files:
