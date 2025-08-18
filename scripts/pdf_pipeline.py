@@ -262,7 +262,7 @@ class OptimizedPDFPipeline:
                  backend: str = "vlm-sglang-client", server_url: str = None,
                  lang: str = "ch", api_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
                  batch_size: int = 100, concurrent_batches: int = 4,
-                 data_json_path: Optional[str] = None):
+                 data_json_path: Optional[str] = None, batches_per_round: Optional[int] = None):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.max_workers = max_workers
@@ -273,6 +273,7 @@ class OptimizedPDFPipeline:
         self.batch_size = batch_size
         self.concurrent_batches = concurrent_batches
         self.data_json_path = data_json_path
+        self.batches_per_round = batches_per_round
 
         # 创建输出目录结构
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -518,53 +519,70 @@ class OptimizedPDFPipeline:
         # 准备批次数据
         batch_data_list = [(i, batch, config) for i, batch in enumerate(batches)]
         
-        logger.info(f"使用多进程处理 {len(batches)} 个批次，最大进程数: {self.concurrent_batches}")
+        # 每轮处理的批次数量（每处理这么多批次后重建进程池）
+        batches_per_round = self.batches_per_round or max(self.concurrent_batches * 10, 50)
+        total_batches = len(batches)
         
-        # 使用进程池处理批次
-        with ProcessPoolExecutor(max_workers=self.concurrent_batches) as executor:
-            # 正常用法：一次性提交所有批次
-            future_to_batch = {}
-            for i, batch_data in enumerate(batch_data_list):
-                future = executor.submit(process_batch_worker, batch_data)
-                future_to_batch[future] = (i, batch_data[1])
+        logger.info(f"使用多进程分轮次处理 {total_batches} 个批次，最大进程数: {self.concurrent_batches}")
+        logger.info(f"每轮处理 {batches_per_round} 个批次后重建进程池")
+        
+        with tqdm(total=total_batches, desc="处理批次", unit="批次") as pbar:
+            # 分轮次处理
+            for round_start in range(0, total_batches, batches_per_round):
+                round_end = min(round_start + batches_per_round, total_batches)
+                current_round_data = batch_data_list[round_start:round_end]
+                round_num = (round_start // batches_per_round) + 1
+                
+                logger.info(f"开始第 {round_num} 轮处理，批次范围: {round_start+1}-{round_end}")
+                
+                # 为这一轮创建新的进程池
+                with ProcessPoolExecutor(max_workers=self.concurrent_batches) as executor:
+                    future_to_batch = {}
+                    # 提交这一轮的所有批次
+                    for batch_data in current_round_data:
+                        batch_idx = batch_data[0]
+                        future = executor.submit(process_batch_worker, batch_data)
+                        future_to_batch[future] = (batch_idx, batch_data[1])
 
-            with tqdm(total=len(batches), desc="处理批次", unit="批次") as pbar:
-                for future in as_completed(future_to_batch):
-                    batch_idx, batch_files = future_to_batch[future]
-                    try:
-                        success, data, parse_time = future.result()
-                        if success:
-                            total_success += len(data)
-                            for item in data:
-                                pdf_file = item["pdf_file"]
-                                self.status.mark_processed(
-                                    str(pdf_file),
-                                    "pdf_processing",
-                                    parse_time,
-                                    success=True,
-                                )
-                        else:
+                    # 收集这一轮的结果
+                    for future in as_completed(future_to_batch):
+                        batch_idx, batch_files = future_to_batch[future]
+                        try:
+                            success, data, parse_time = future.result()
+                            if success:
+                                total_success += len(data)
+                                for item in data:
+                                    pdf_file = item["pdf_file"]
+                                    self.status.mark_processed(
+                                        str(pdf_file),
+                                        "pdf_processing",
+                                        parse_time,
+                                        success=True,
+                                    )
+                            else:
+                                for pdf_file in batch_files:
+                                    self.status.mark_processed(
+                                        str(pdf_file),
+                                        "pdf_processing",
+                                        parse_time,
+                                        success=False,
+                                        error_msg="批次处理失败",
+                                    )
+                            pbar.set_postfix({"成功": total_success})
+                        except Exception as e:
+                            logger.error(f"批次 {batch_idx + 1} 处理异常: {e}")
                             for pdf_file in batch_files:
                                 self.status.mark_processed(
                                     str(pdf_file),
                                     "pdf_processing",
-                                    parse_time,
+                                    0,
                                     success=False,
-                                    error_msg="批次处理失败",
+                                    error_msg=f"处理异常: {e}",
                                 )
-                        pbar.set_postfix({"成功": total_success})
-                    except Exception as e:
-                        logger.error(f"批次 {batch_idx + 1} 处理异常: {e}")
-                        for pdf_file in batch_files:
-                            self.status.mark_processed(
-                                str(pdf_file),
-                                "pdf_processing",
-                                0,
-                                success=False,
-                                error_msg=f"处理异常: {e}",
-                            )
-                    finally:
-                        pbar.update(1)
+                        finally:
+                            pbar.update(1)
+                
+                logger.info(f"第 {round_num} 轮处理完成，进程池已重建")
         
         logger.success(f"所有批次处理完成，总共成功处理 {total_success} 个文件")
         return total_success > 0, []

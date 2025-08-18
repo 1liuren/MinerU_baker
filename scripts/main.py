@@ -95,6 +95,12 @@ def parse_args():
         default=4, 
         help="同时处理的批次数量 (默认: 4)"
     )
+    parser.add_argument(
+        "--batches-per-round", 
+        type=int, 
+        default=None, 
+        help="每轮处理的批次数量，处理完后重建进程池 (默认: max(concurrent_batches*10, 50))"
+    )
 
     
     # 其他配置
@@ -183,7 +189,8 @@ def main():
             api_url=args.api_url,
             batch_size=args.batch_size,
             concurrent_batches=args.concurrent_batches,
-            data_json_path=args.data_json_path
+            data_json_path=args.data_json_path,
+            batches_per_round=args.batches_per_round
         )
         
         # 运行流水线
