@@ -77,7 +77,7 @@ def process_batch_worker(batch_data):
         
         if not pdf_bytes_list:
             logger.error(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 没有可处理的文件")
-            return False, []
+            return False, [], 0
         
         # 动态导入do_parse
         demo_path = Path(config['demo_path'])
@@ -223,21 +223,27 @@ def process_batch_worker(batch_data):
                     if error:
                         logger.error(f"进程 {os.getpid()}: 元数据提取失败 {file_info['pdf_file'].name}: {error}")
                     
+                    # 仅返回必要的最小信息以减少跨进程传输负载
                     processed_data.append({
-                        "pdf_file": file_info["pdf_file"],
-                        "content": file_info["content"],
-                        "metadata": metadata,
-                        "file_name": file_info["file_name"],
-                        "idx": file_info["idx"]
+                        "pdf_file": file_info["pdf_file"]
                     })
             
             logger.success(f"进程 {os.getpid()}: 元数据提取完成，处理了 {len(file_contents)} 个文件")
         
-        # 清理临时目录
+        # 清理临时目录与局部变量，尽量释放内存
         try:
             shutil.rmtree(temp_output_dir)
         except Exception as e:
             logger.warning(f"进程 {os.getpid()}: 清理临时目录失败: {e}")
+        
+        # 主动触发垃圾回收
+        try:
+            import gc
+            del file_name_list, pdf_bytes_list, lang_list, valid_files
+            del file_contents, processed_data
+            gc.collect()
+        except Exception:
+            pass
         
         return True, processed_data, parse_time  # 返回真正的批次处理时间
         
@@ -493,7 +499,6 @@ class OptimizedPDFPipeline:
     
     def _process_batches_multiprocess(self, batches: List[List[Path]]) -> Tuple[bool, List[Dict]]:
         """使用多进程处理多个批次"""
-        all_processed_data = []
         total_success = 0
         
         # 准备配置数据
@@ -517,59 +522,51 @@ class OptimizedPDFPipeline:
         
         # 使用进程池处理批次
         with ProcessPoolExecutor(max_workers=self.concurrent_batches) as executor:
-            # 提交所有批次任务
+            # 正常用法：一次性提交所有批次
             future_to_batch = {}
-            
             for i, batch_data in enumerate(batch_data_list):
                 future = executor.submit(process_batch_worker, batch_data)
                 future_to_batch[future] = (i, batch_data[1])
-            
-            # 收集结果
+
             with tqdm(total=len(batches), desc="处理批次", unit="批次") as pbar:
                 for future in as_completed(future_to_batch):
                     batch_idx, batch_files = future_to_batch[future]
-                    
                     try:
-                        success, data, parse_time = future.result()  # 接收真正的批次处理时间
+                        success, data, parse_time = future.result()
                         if success:
-                            all_processed_data.extend(data)
                             total_success += len(data)
-                            # 更新处理状态
                             for item in data:
                                 pdf_file = item["pdf_file"]
                                 self.status.mark_processed(
-                                    str(pdf_file), 
-                                    "pdf_processing", 
-                                    parse_time,  # 使用真正的批次处理时间
-                                    success=True
+                                    str(pdf_file),
+                                    "pdf_processing",
+                                    parse_time,
+                                    success=True,
                                 )
                         else:
-                            # 标记批次中的文件为失败
                             for pdf_file in batch_files:
                                 self.status.mark_processed(
-                                    str(pdf_file), 
-                                    "pdf_processing", 
-                                    parse_time,  # 使用真正的批次处理时间
-                                    success=False, 
-                                    error_msg="批次处理失败"
+                                    str(pdf_file),
+                                    "pdf_processing",
+                                    parse_time,
+                                    success=False,
+                                    error_msg="批次处理失败",
                                 )
-                        pbar.set_postfix({"成功": total_success})
                     except Exception as e:
                         logger.error(f"批次 {batch_idx + 1} 处理异常: {e}")
-                        # 标记批次中的文件为失败，使用默认时间0
                         for pdf_file in batch_files:
                             self.status.mark_processed(
-                                str(pdf_file), 
-                                "pdf_processing", 
-                                0,  # 异常情况下使用默认时间
-                                success=False, 
-                                error_msg=f"处理异常: {e}"
+                                str(pdf_file),
+                                "pdf_processing",
+                                0,
+                                success=False,
+                                error_msg=f"处理异常: {e}",
                             )
                     finally:
                         pbar.update(1)
         
         logger.success(f"所有批次处理完成，总共成功处理 {total_success} 个文件")
-        return total_success > 0, all_processed_data
+        return total_success > 0, []
 
     
     def extract_metadata_from_content(self, content: str) -> Dict:
@@ -710,7 +707,7 @@ class OptimizedPDFPipeline:
                 return False
             
             # 步骤3: 生成最终JSONL
-            if not self.create_final_jsonl(processed_data):
+            if not self.create_final_jsonl([]):
                 logger.error("JSONL生成失败")
                 return False
             

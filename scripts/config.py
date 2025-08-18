@@ -31,7 +31,8 @@ def configure_logging(log_level: str = "INFO", log_file: str = None):
             format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
             level="DEBUG",
             rotation="10 MB",
-            retention="7 days"
+            retention="7 days",
+            enqueue=True  # 多进程安全写入
         )
         logger.info(f"日志文件: {log_path}")
 
