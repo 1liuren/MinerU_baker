@@ -361,15 +361,15 @@ class OptimizedPDFPipeline:
                     try:
                         file_path = str(item.get("file_path", "")).strip()
                         ok_status = str(item.get("ok_status", "")).strip()
-                        # if file_path and ok_status == "合格":
-                        #     ok_stems.add(Path(file_path).stem)
-                        error_list = item.get("error_list", [])
+                        if file_path and ok_status == "合格":
+                            ok_stems.add(Path(file_path).stem)
+                        # error_list = item.get("error_list", [])
                         
-                        # 只处理仅有"分类错误"一个错误的文件
-                        if file_path and ok_status == "不合格" and len(error_list) == 1:
-                            error_item = error_list[0]
-                            if isinstance(error_item, dict) and error_item.get("1") == "分类错误":
-                                ok_stems.add(Path(file_path).stem)
+                        # # 只处理仅有"分类错误"一个错误的文件
+                        # if file_path and ok_status == "不合格" and len(error_list) == 1:
+                        #     error_item = error_list[0]
+                        #     if isinstance(error_item, dict) and error_item.get("1") == "分类错误":
+                        #         ok_stems.add(Path(file_path).stem)
                     except Exception:
                         continue
 
