@@ -427,11 +427,11 @@ class OptimizedPDFPipeline:
         pdf_files = unique_pdf_files
 
         # 基于数据筛选文件（ok_status == "合格"）
-        ok_stems = self._load_ok_file_stems(self.data_json_path)
-        if ok_stems:
-            before_cnt = len(pdf_files)
-            pdf_files = [p for p in pdf_files if p.stem in ok_stems]
-            logger.info(f"按过滤表筛选: {before_cnt} -> {len(pdf_files)}")
+        # ok_stems = self._load_ok_file_stems(self.data_json_path)
+        # if ok_stems:
+        #     before_cnt = len(pdf_files)
+        #     pdf_files = [p for p in pdf_files if p.stem in ok_stems]
+        #     logger.info(f"按过滤表筛选: {before_cnt} -> {len(pdf_files)}")
         
         if not pdf_files:
             logger.error("未找到PDF文件")
@@ -642,7 +642,7 @@ class OptimizedPDFPipeline:
                                             logger.debug(f"使用大模型提取的元数据: {pdf_name}")
                                             metadata = extracted_metadata
                                             # 确保基本字段存在
-                                            metadata.setdefault("source_file", pdf_name)
+                                            metadata.setdefault("book_name", pdf_name)
                                             metadata.setdefault("lang", "zh")
                                             metadata.setdefault("type", "书籍")
                                             metadata.setdefault("processing_date", datetime.now().strftime("%Y-%m-%d"))
@@ -684,12 +684,14 @@ class OptimizedPDFPipeline:
                 for item in all_processed_data:
                     jsonl_record = {
                         "id": hashlib.sha256(item["content"].encode('utf-8')).hexdigest(),
-                        "text": item["content"],
+                        "text": item["metadata"].get("text", ""),
                         "meta": {
                             "data_info": {
                                 "lang": item["metadata"].get("lang", "zh"),
-                                "source": item["metadata"].get("source_file", item["metadata"].get("publisher", "")),
+                                "source": item["metadata"].get("publisher", ""),
                                 "type": item["metadata"].get("type", "书籍"),
+                                "book_name": item["metadata"].get("title", ""),
+                                "book_content": item["content"],
                                 "author": item["metadata"].get("author", ""),
                                 "processing_date": item["metadata"].get("processing_date", datetime.now().strftime("%Y-%m-%d"))
                             },

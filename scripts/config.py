@@ -64,6 +64,7 @@ def create_book_metadata_model(BaseModel, Field):
         return None
         
     class BookMetadata(BaseModel):
+        text: str = Field(description="书本的摘要")
         title: str = Field(description="书籍标题")
         author: str = Field(description="作者名称")
         publisher: str = Field(description="出版社")
