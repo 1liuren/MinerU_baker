@@ -105,6 +105,8 @@ def reextract_all(results_dir: Path, api_url: str, workers: int, skip_existing: 
             return False, f"读取MD失败: {md_path} - {e}"
         try:
             metadata = extract_metadata_with_llm(content, api_url)
+            if not metadata:
+                return False, f"提取失败: {md_path}"
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(metadata or {}, f, ensure_ascii=False, indent=2)
             return True, f"更新 {out_path}"

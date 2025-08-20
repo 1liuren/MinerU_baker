@@ -197,6 +197,8 @@ def process_batch_worker(batch_data):
                     metadata = extract_metadata_with_llm(file_info["content"], api_url)
                     
                     # 保存元数据到单独的JSON文件
+                    if not metadata:
+                        return file_info, {}, '元数据提取失败'
                     metadata_file = file_info["final_dir"] / f"{file_info['pdf_file'].stem}_extracted_metadata.json"
                     with open(metadata_file, 'w', encoding='utf-8') as f:
                         json.dump(metadata, f, ensure_ascii=False, indent=2)
@@ -427,11 +429,11 @@ class OptimizedPDFPipeline:
         pdf_files = unique_pdf_files
 
         # 基于数据筛选文件（ok_status == "合格"）
-        # ok_stems = self._load_ok_file_stems(self.data_json_path)
-        # if ok_stems:
-        #     before_cnt = len(pdf_files)
-        #     pdf_files = [p for p in pdf_files if p.stem in ok_stems]
-        #     logger.info(f"按过滤表筛选: {before_cnt} -> {len(pdf_files)}")
+        ok_stems = self._load_ok_file_stems(self.data_json_path)
+        if ok_stems:
+            before_cnt = len(pdf_files)
+            pdf_files = [p for p in pdf_files if p.stem in ok_stems]
+            logger.info(f"按过滤表筛选: {before_cnt} -> {len(pdf_files)}")
         
         if not pdf_files:
             logger.error("未找到PDF文件")

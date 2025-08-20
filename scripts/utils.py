@@ -197,4 +197,4 @@ def extract_metadata_with_llm(text: str, api_url: str) -> Dict:
             
     except Exception as e:
         logger.error(f"元数据提取失败: {e}")
-        return {}
+        return False
