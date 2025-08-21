@@ -56,7 +56,7 @@ def parse_args():
     parser.add_argument(
         "--server-url", 
         default="http://10.10.50.50:30000",
-        help="sglang服务器URL (例如: http://localhost:30000)"
+        help="sglang服务器URL，支持逗号分隔多个地址(例如: http://host1:30000,http://host2:30000)"
     )
     parser.add_argument(
         "--lang", 
@@ -100,6 +100,12 @@ def parse_args():
         type=int, 
         default=None, 
         help="每轮处理的批次数量，处理完后重建进程池 (默认: max(concurrent_batches*10, 50))"
+    )
+    parser.add_argument(
+        "--lb-strategy",
+        choices=["round_robin", "random"],
+        default="round_robin",
+        help="多服务器URL的负载均衡策略 (默认: round_robin)"
     )
 
     
@@ -190,7 +196,8 @@ def main():
             batch_size=args.batch_size,
             concurrent_batches=args.concurrent_batches,
             data_json_path=args.data_json_path,
-            batches_per_round=args.batches_per_round
+            batches_per_round=args.batches_per_round,
+            lb_strategy=args.lb_strategy
         )
         
         # 运行流水线

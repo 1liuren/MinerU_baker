@@ -264,12 +264,20 @@ class OptimizedPDFPipeline:
                  backend: str = "vlm-sglang-client", server_url: str = None,
                  lang: str = "ch", api_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
                  batch_size: int = 100, concurrent_batches: int = 4,
-                 data_json_path: Optional[str] = None, batches_per_round: Optional[int] = None):
+                 data_json_path: Optional[str] = None, batches_per_round: Optional[int] = None,
+                 lb_strategy: str = "round_robin"):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.max_workers = max_workers
         self.backend = backend
-        self.server_url = server_url
+        # 多URL解析
+        if server_url and "," in server_url:
+            urls = [u.strip() for u in server_url.split(",") if u.strip()]
+        else:
+            urls = [server_url] if server_url else []
+        self.server_urls: list[str] = urls
+        self._rr_idx = 0
+        self.lb_strategy = lb_strategy
         self.lang = lang
         self.api_url = api_url
         self.batch_size = batch_size
@@ -303,6 +311,8 @@ class OptimizedPDFPipeline:
         logger.info("初始化MinerU流水线")
         logger.info(f"Backend: {self.backend}")
         logger.info(f"Server URL: {self.server_url}")
+        if self.server_urls and len(self.server_urls) > 1:
+            logger.info(f"启用多服务器: {self.server_urls}，策略: {self.lb_strategy}")
         logger.info(f"Language: {self.lang}")
         logger.info(f"Max Workers: {self.max_workers}")
     def _load_ok_file_stems(self, filter_json_path=None):
@@ -514,7 +524,7 @@ class OptimizedPDFPipeline:
         # 准备配置数据
         config = {
             'backend': self.backend,
-            'server_url': self.server_url,
+            'server_url': None,
             'lang': self.lang,
             'api_url': self.api_url,
             'results_dir': str(self.results_dir),
@@ -526,7 +536,23 @@ class OptimizedPDFPipeline:
         }
         
         # 准备批次数据
-        batch_data_list = [(i, batch, config) for i, batch in enumerate(batches)]
+        # 为每个批次分配server_url
+        import random
+        def pick_url() -> Optional[str]:
+            if not self.server_urls:
+                return self.server_url
+            if self.lb_strategy == "random":
+                return random.choice(self.server_urls)
+            # 默认round robin
+            url = self.server_urls[self._rr_idx % len(self.server_urls)]
+            self._rr_idx += 1
+            return url
+
+        batch_data_list = []
+        for i, batch in enumerate(batches):
+            cfg = dict(config)
+            cfg['server_url'] = pick_url()
+            batch_data_list.append((i, batch, cfg))
         
         # 每轮处理的批次数量（每处理这么多批次后重建进程池）
         batches_per_round = self.batches_per_round or max(self.concurrent_batches * 10, 50)

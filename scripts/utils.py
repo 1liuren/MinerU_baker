@@ -155,7 +155,7 @@ def extract_metadata_with_llm(text: str, api_url: str) -> Dict:
     "title": "书籍标题",
     "author": "作者姓名",
     "publisher": "出版社名称",
-    "lang": "语言（例如：zh）",
+    "lang": "语言（例如：zh、en）",
     "category": ["分类1", "分类2"],
     "knowledge": ["知识点1", "知识点2"]
 }}
