@@ -276,6 +276,8 @@ class OptimizedPDFPipeline:
         else:
             urls = [server_url] if server_url else []
         self.server_urls: list[str] = urls
+        # 兼容：保留原始字符串形式，供日志与回退逻辑使用
+        self.server_url = server_url
         self._rr_idx = 0
         self.lb_strategy = lb_strategy
         self.lang = lang
