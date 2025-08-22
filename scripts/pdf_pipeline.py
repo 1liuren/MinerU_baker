@@ -99,6 +99,7 @@ def process_batch_worker(batch_data):
         temp_output_dir.mkdir(exist_ok=True)
         
         logger.info(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 开始调用do_parse处理 {len(pdf_bytes_list)} 个文件")
+        logger.info(f"server_url: {config['server_url']}")
         
         # 调用do_parse
         parse_start_time = time.time()
@@ -678,7 +679,9 @@ class OptimizedPDFPipeline:
             m = self._scrape_metrics(url)
             if m is not None:
                 results.append((url, m))
-
+        logger.info("各节点负载情况:")
+        for url, metrics in results:
+            logger.info(f"  {url}: inflight={metrics['inflight']}")
         if results:
             min_inflight = min(m["inflight"] for _, m in results)
             candidates = [u for u, m in results if m["inflight"] == min_inflight]
