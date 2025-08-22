@@ -593,11 +593,6 @@ class OptimizedPDFPipeline:
                                         parse_time,
                                         success=True,
                                     )
-                                # 更新 EWMA（使用批次总耗时作为样本）
-                                if assigned_url and assigned_url in self._lb_stats and parse_time:
-                                    sample_ms = max(parse_time * 1000.0, 1.0)
-                                    st = self._lb_stats[assigned_url]
-                                    st["ewma_ms"] = self._ewma_alpha * sample_ms + (1.0 - self._ewma_alpha) * st["ewma_ms"]
                             else:
                                 for pdf_file in batch_files:
                                     self.status.mark_processed(
@@ -662,7 +657,7 @@ class OptimizedPDFPipeline:
             return None
 
     def _choose_url_by_metrics(self) -> Optional[str]:
-        """基于 /metrics 即时负载选择最空闲的URL。回退到轮询。"""
+        """基于 /metrics 即时负载选择最空闲的URL，仅使用 inflight；若全为0则随机选。失败回退轮询。"""
         if not self.server_urls:
             return self.server_url
 
@@ -673,13 +668,12 @@ class OptimizedPDFPipeline:
                 results.append((url, m))
 
         if results:
-            # 排序键：inflight -> queue -> e2e_avg_ms -> (-gen_tps)
-            def _key(item: tuple[str, dict]):
-                _, m = item
-                return (m["inflight"], m["queue"], m["e2e_avg_ms"], -m["gen_tps"])
-
-            results.sort(key=_key)
-            return results[0][0]
+            min_inflight = min(m["inflight"] for _, m in results)
+            candidates = [u for u, m in results if m["inflight"] == min_inflight]
+            if len(candidates) > 1:
+                import random
+                return random.choice(candidates)
+            return candidates[0]
         
         logger.warning("所有节点抓取失败，回退为轮询")
         # 全部抓取失败时，回退为轮询
