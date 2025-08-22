@@ -103,7 +103,7 @@ def parse_args():
     )
     parser.add_argument(
         "--lb-strategy",
-        choices=["round_robin", "random"],
+        choices=["round_robin", "random","ewma"],
         default="round_robin",
         help="多服务器URL的负载均衡策略 (默认: round_robin)"
     )

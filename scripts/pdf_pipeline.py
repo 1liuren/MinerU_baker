@@ -20,6 +20,7 @@ from multiprocessing import Manager, Queue
 from typing import Dict, List, Tuple, Optional
 from tqdm import tqdm
 from loguru import logger
+import httpx
 
 from .config import configure_logging, OpenAI, BookMetadata
 from .status_manager import ProcessingStatus
@@ -287,17 +288,7 @@ class OptimizedPDFPipeline:
         self.data_json_path = data_json_path
         self.batches_per_round = batches_per_round
 
-        # 负载均衡统计（仅当存在多个URL时启用）
-        self._lb_stats: dict[str, dict] = {}
-        self._ewma_alpha: float = 0.2  # EWMA 平滑系数
-        self._default_ewma_ms: float = 8000.0  # 初始估计时延（毫秒）
-        if len(self.server_urls) > 1:
-            for url in self.server_urls:
-                self._lb_stats[url] = {
-                    "ewma_ms": self._default_ewma_ms,
-                    "inflight": 0,
-                    "weight": 1.0,
-                }
+        # 仅在多URL时启用基于 /metrics 的调度
 
         # 创建输出目录结构
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -549,7 +540,7 @@ class OptimizedPDFPipeline:
             'dashscope_api_key': os.getenv('DASHSCOPE_API_KEY')  # 显式传递API密钥
         }
         
-        # 准备批次数据（此处不预先分配 server_url，改为提交任务时再择址）
+        # 准备批次数据（此处不预先分配 server_url，提交时基于 /metrics 择址）
         batch_data_list = []
         for i, batch in enumerate(batches):
             cfg = dict(config)
@@ -576,40 +567,12 @@ class OptimizedPDFPipeline:
                 with ProcessPoolExecutor(max_workers=self.concurrent_batches) as executor:
                     future_to_batch = {}
                     # 提交这一轮的所有批次
-                    import random
                     for batch_data in current_round_data:
                         batch_idx, batch_files, cfg = batch_data
-                        # 选择URL（支持 ewma / random / round_robin）
-                        def _choose_url() -> Optional[str]:
-                            if not self.server_urls:
-                                return self.server_url
-                            if self.lb_strategy == "random":
-                                return random.choice(self.server_urls)
-                            if self.lb_strategy == "ewma":
-                                # 选择得分最小的URL：score = (inflight+1) * ewma_ms / weight
-                                best_url = None
-                                best_score = None
-                                for url in self.server_urls:
-                                    st = self._lb_stats.get(url)
-                                    if not st:
-                                        continue
-                                    score = (st["inflight"] + 1) * st["ewma_ms"] / max(st.get("weight", 1.0), 1e-6)
-                                    if best_score is None or score < best_score:
-                                        best_score = score
-                                        best_url = url
-                                return best_url or self.server_urls[0]
-                            # 默认：round robin
-                            url = self.server_urls[self._rr_idx % len(self.server_urls)]
-                            self._rr_idx += 1
-                            return url
-
-                        assigned_url = _choose_url()
+                        # 选择URL（每次即时抓取 /metrics，选择相对空闲的节点）
+                        assigned_url = self._choose_url_by_metrics()
                         cfg2 = dict(cfg)
                         cfg2['server_url'] = assigned_url
-
-                        # inflight++（仅在多URL时统计）
-                        if assigned_url and assigned_url in self._lb_stats:
-                            self._lb_stats[assigned_url]["inflight"] += 1
 
                         future = executor.submit(process_batch_worker, (batch_idx, batch_files, cfg2))
                         # 记录映射以便完成后更新统计
@@ -656,20 +619,74 @@ class OptimizedPDFPipeline:
                                     error_msg=f"处理异常: {e}",
                                 )
                         finally:
-                            # inflight--
-                            if assigned_url and assigned_url in self._lb_stats:
-                                try:
-                                    self._lb_stats[assigned_url]["inflight"] = max(
-                                        0, self._lb_stats[assigned_url]["inflight"] - 1
-                                    )
-                                except Exception:
-                                    pass
                             pbar.update(1)
-                
-                logger.info(f"第 {round_num} 轮处理完成，进程池已重建")
-        
+                logger.success(f"第 {round_num} 轮处理完成")
+                            
         logger.success(f"所有批次处理完成，总共成功处理 {total_success} 个文件")
         return total_success > 0, []
+
+    def _scrape_metrics(self, base_url: str, timeout: float = 2.0) -> Optional[dict]:
+        """抓取单个节点的 /metrics 指标，返回核心负载数据。"""
+        try:
+            r = httpx.get(f"{base_url}/metrics", timeout=timeout)
+            r.raise_for_status()
+            lines = r.text.splitlines()
+
+            def _last_float(prefix: str) -> Optional[float]:
+                for i in range(len(lines) - 1, -1, -1):
+                    ln = lines[i]
+                    if ln.startswith(prefix):
+                        try:
+                            return float(ln.rsplit(" ", 1)[-1])
+                        except Exception:
+                            return None
+                return None
+
+            inflight = _last_float("sglang:num_running_reqs")
+            queue = _last_float("sglang:num_queue_reqs")
+            e2e_sum = _last_float("sglang:e2e_request_latency_seconds_sum")
+            e2e_cnt = _last_float("sglang:e2e_request_latency_seconds_count")
+            gen_tps = _last_float("sglang:gen_throughput")
+
+            e2e_avg_ms = None
+            if e2e_sum is not None and e2e_cnt is not None and e2e_cnt > 0:
+                e2e_avg_ms = (e2e_sum / e2e_cnt) * 1000.0
+
+            return {
+                "inflight": int(inflight or 0),
+                "queue": int(queue or 0),
+                "e2e_avg_ms": float(e2e_avg_ms if e2e_avg_ms is not None else 8000.0),
+                "gen_tps": float(gen_tps if gen_tps is not None else 1.0),
+            }
+        except Exception:
+            return None
+
+    def _choose_url_by_metrics(self) -> Optional[str]:
+        """基于 /metrics 即时负载选择最空闲的URL。回退到轮询。"""
+        if not self.server_urls:
+            return self.server_url
+
+        results: list[tuple[str, dict]] = []
+        for url in self.server_urls:
+            m = self._scrape_metrics(url)
+            if m is not None:
+                results.append((url, m))
+
+        if results:
+            # 排序键：inflight -> queue -> e2e_avg_ms -> (-gen_tps)
+            def _key(item: tuple[str, dict]):
+                _, m = item
+                return (m["inflight"], m["queue"], m["e2e_avg_ms"], -m["gen_tps"])
+
+            results.sort(key=_key)
+            return results[0][0]
+        
+        logger.warning("所有节点抓取失败，回退为轮询")
+        # 全部抓取失败时，回退为轮询
+        url = self.server_urls[self._rr_idx % len(self.server_urls)]
+        self._rr_idx += 1
+        return url
+
 
     
     def extract_metadata_from_content(self, content: str) -> Dict:
