@@ -100,6 +100,54 @@ def process_batch_worker(batch_data):
         temp_output_dir.mkdir(exist_ok=True)
         
         logger.info(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 开始调用do_parse处理 {len(pdf_bytes_list)} 个文件")
+
+        # 在子进程内进行节点选择，基于各URL实时 /metrics 的 inflight 聚合
+        def _scrape_metrics(base_url: str, timeout: float = 2.0) -> int | None:
+            try:
+                import httpx as _httpx
+                r = _httpx.get(f"{base_url}/metrics", timeout=timeout)
+                r.raise_for_status()
+                total = 0.0
+                prefix = "sglang:num_running_reqs{"
+                for ln in r.text.splitlines():
+                    if ln.startswith(prefix):
+                        try:
+                            total += float(ln.rsplit(" ", 1)[-1])
+                        except Exception:
+                            pass
+                return int(total)
+            except Exception:
+                return None
+
+        def _choose_url_by_metrics(urls: list[str]) -> str | None:
+            if not urls:
+                return None
+            metrics: list[tuple[str, int]] = []
+            for u in urls:
+                v = _scrape_metrics(u)
+                if v is not None:
+                    metrics.append((u, v))
+            if metrics:
+                # 打印各节点负载情况
+                logger.info("当前各节点负载情况:")
+                for url, inflight in metrics:
+                    logger.info(f"  {url}: {inflight} 个请求")
+                min_v = min(v for _, v in metrics)
+                candidates = [u for u, v in metrics if v == min_v]
+                if len(candidates) > 1:
+                    import random as _random
+                    return _random.choice(candidates)
+                return candidates[0]
+            # 全失败时返回第一个
+            return urls[0]
+
+        server_urls = config.get('server_urls') or []
+        selected_server_url = None
+        if isinstance(server_urls, list) and len(server_urls) > 0:
+            selected_server_url = _choose_url_by_metrics(server_urls)
+        if not selected_server_url:
+            selected_server_url = config.get('server_url')
+        logger.info(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 选用节点: {selected_server_url}")
         logger.info(f"server_url: {config['server_url']}")
         
         # 调用do_parse
@@ -113,7 +161,7 @@ def process_batch_worker(batch_data):
             parse_method="auto",
             formula_enable=True,
             table_enable=True,
-            server_url=config['server_url'],
+            server_url=selected_server_url,
             f_draw_layout_bbox=False,
             f_draw_span_bbox=False,
             f_dump_md=True,
@@ -542,7 +590,7 @@ class OptimizedPDFPipeline:
             'dashscope_api_key': os.getenv('DASHSCOPE_API_KEY')  # 显式传递API密钥
         }
         
-        # 准备批次数据（此处不预先分配 server_url，提交时基于 /metrics 择址）
+        # 准备批次数据（不在主进程择址，改为子进程内实时择址）
         batch_data_list = []
         for i, batch in enumerate(batches):
             cfg = dict(config)
@@ -550,7 +598,7 @@ class OptimizedPDFPipeline:
             batch_data_list.append((i, batch, cfg))
         
         # 每轮处理的批次数量（每处理这么多批次后重建进程池）
-        batches_per_round = self.batches_per_round or max(self.concurrent_batches * 10, 50)
+        batches_per_round = self.batches_per_round or max(self.concurrent_batches * 10, 200)
         total_batches = len(batches)
         
         logger.info(f"使用多进程分轮次处理 {total_batches} 个批次，最大进程数: {self.concurrent_batches}")
@@ -565,32 +613,19 @@ class OptimizedPDFPipeline:
                 
                 logger.info(f"开始第 {round_num} 轮处理，批次范围: {round_start+1}-{round_end}")
                 
-                # 为这一轮创建新的进程池（首轮降并发至20%，随后恢复）
-                if round_start == 0:
-                    round_max_workers = max(1, math.ceil(self.concurrent_batches * 0.2))
-                    if round_max_workers < self.concurrent_batches:
-                        logger.info(f"首轮暖机：并发由 {self.concurrent_batches} 暂降至 {round_max_workers}")
-                else:
-                    round_max_workers = self.concurrent_batches
 
-                with ProcessPoolExecutor(max_workers=round_max_workers) as executor:
+
+                with ProcessPoolExecutor(max_workers=self.concurrent_batches) as executor:
                     future_to_batch = {}
-                    # 提交这一轮的所有批次
+                    # 提交这一轮的所有批次（不在这里选择节点）
                     for batch_data in current_round_data:
                         batch_idx, batch_files, cfg = batch_data
-                        # 选择URL（每次即时抓取 /metrics，选择相对空闲的节点）
-                        assigned_url = self._choose_url_by_metrics()
-                        cfg2 = dict(cfg)
-                        cfg2['server_url'] = assigned_url
-                        logger.info(f"选择节点: {assigned_url}")
-
-                        future = executor.submit(process_batch_worker, (batch_idx, batch_files, cfg2))
-                        # 记录映射以便完成后更新统计
-                        future_to_batch[future] = (batch_idx, batch_files, assigned_url)
+                        future = executor.submit(process_batch_worker, (batch_idx, batch_files, cfg))
+                        future_to_batch[future] = (batch_idx, batch_files)
 
                     # 收集这一轮的结果
                     for future in as_completed(future_to_batch):
-                        batch_idx, batch_files, assigned_url = future_to_batch[future]
+                        batch_idx, batch_files = future_to_batch[future]
                         try:
                             success, data, parse_time = future.result()
                             if success:
@@ -630,80 +665,7 @@ class OptimizedPDFPipeline:
         logger.success(f"所有批次处理完成，总共成功处理 {total_success} 个文件")
         return total_success > 0, []
 
-    def _scrape_metrics(self, base_url: str, timeout: float = 2.0) -> Optional[dict]:
-        """抓取单个节点的 /metrics 指标，返回核心负载数据。
-        inflight 取所有 dp_rank 行的总和，避免单行解析失真。
-        """
-        try:
-            r = httpx.get(f"{base_url}/metrics", timeout=timeout)
-            r.raise_for_status()
-            lines = r.text.splitlines()
-
-            def _last_float(prefix: str) -> Optional[float]:
-                for i in range(len(lines) - 1, -1, -1):
-                    ln = lines[i]
-                    if ln.startswith(prefix):
-                        try:
-                            return float(ln.rsplit(" ", 1)[-1])
-                        except Exception:
-                            return None
-                return None
-
-            # 聚合 inflight：sum 所有 dp_rank 行
-            total_inflight = 0.0
-            prefix_inflight = "sglang:num_running_reqs{"
-            for ln in lines:
-                if ln.startswith(prefix_inflight):
-                    try:
-                        total_inflight += float(ln.rsplit(" ", 1)[-1])
-                    except Exception:
-                        pass
-            inflight = total_inflight
-            queue = _last_float("sglang:num_queue_reqs")
-            e2e_sum = _last_float("sglang:e2e_request_latency_seconds_sum")
-            e2e_cnt = _last_float("sglang:e2e_request_latency_seconds_count")
-            gen_tps = _last_float("sglang:gen_throughput")
-
-            e2e_avg_ms = None
-            if e2e_sum is not None and e2e_cnt is not None and e2e_cnt > 0:
-                e2e_avg_ms = (e2e_sum / e2e_cnt) * 1000.0
-
-            return {
-                "inflight": int(inflight or 0),
-                "queue": int(queue or 0),
-                "e2e_avg_ms": float(e2e_avg_ms if e2e_avg_ms is not None else 8000.0),
-                "gen_tps": float(gen_tps if gen_tps is not None else 1.0),
-            }
-        except Exception:
-            return None
-
-    def _choose_url_by_metrics(self) -> Optional[str]:
-        """基于 /metrics 即时负载选择最空闲的URL，仅使用 inflight；若全为0则随机选。失败回退轮询。"""
-        if not self.server_urls:
-            return self.server_url
-
-        results: list[tuple[str, dict]] = []
-        for url in self.server_urls:
-            m = self._scrape_metrics(url)
-            if m is not None:
-                results.append((url, m))
-        logger.info("各节点负载情况:")
-        for url, metrics in results:
-            logger.info(f"  {url}: inflight={metrics['inflight']}")
-        if results:
-            min_inflight = min(m["inflight"] for _, m in results)
-            candidates = [u for u, m in results if m["inflight"] == min_inflight]
-            if len(candidates) > 1:
-                import random
-                return random.choice(candidates)
-            return candidates[0]
-        
-        logger.warning("所有节点抓取失败，回退为轮询")
-        # 全部抓取失败时，回退为轮询
-        url = self.server_urls[self._rr_idx % len(self.server_urls)]
-        self._rr_idx += 1
-        return url
-
+    
 
     
     def extract_metadata_from_content(self, content: str) -> Dict:
