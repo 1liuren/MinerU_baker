@@ -21,6 +21,7 @@ from typing import Dict, List, Tuple, Optional
 from tqdm import tqdm
 from loguru import logger
 import httpx
+import math
 
 from .config import configure_logging, OpenAI, BookMetadata
 from .status_manager import ProcessingStatus
@@ -564,8 +565,15 @@ class OptimizedPDFPipeline:
                 
                 logger.info(f"开始第 {round_num} 轮处理，批次范围: {round_start+1}-{round_end}")
                 
-                # 为这一轮创建新的进程池
-                with ProcessPoolExecutor(max_workers=self.concurrent_batches) as executor:
+                # 为这一轮创建新的进程池（首轮降并发至20%，随后恢复）
+                if round_start == 0:
+                    round_max_workers = max(1, math.ceil(self.concurrent_batches * 0.2))
+                    if round_max_workers < self.concurrent_batches:
+                        logger.info(f"首轮暖机：并发由 {self.concurrent_batches} 暂降至 {round_max_workers}")
+                else:
+                    round_max_workers = self.concurrent_batches
+
+                with ProcessPoolExecutor(max_workers=round_max_workers) as executor:
                     future_to_batch = {}
                     # 提交这一轮的所有批次
                     for batch_data in current_round_data:
