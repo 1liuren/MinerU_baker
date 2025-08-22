@@ -573,6 +573,7 @@ class OptimizedPDFPipeline:
                         assigned_url = self._choose_url_by_metrics()
                         cfg2 = dict(cfg)
                         cfg2['server_url'] = assigned_url
+                        logger.info(f"选择节点: {assigned_url}")
 
                         future = executor.submit(process_batch_worker, (batch_idx, batch_files, cfg2))
                         # 记录映射以便完成后更新统计
@@ -621,7 +622,9 @@ class OptimizedPDFPipeline:
         return total_success > 0, []
 
     def _scrape_metrics(self, base_url: str, timeout: float = 2.0) -> Optional[dict]:
-        """抓取单个节点的 /metrics 指标，返回核心负载数据。"""
+        """抓取单个节点的 /metrics 指标，返回核心负载数据。
+        inflight 取所有 dp_rank 行的总和，避免单行解析失真。
+        """
         try:
             r = httpx.get(f"{base_url}/metrics", timeout=timeout)
             r.raise_for_status()
@@ -637,7 +640,16 @@ class OptimizedPDFPipeline:
                             return None
                 return None
 
-            inflight = _last_float("sglang:num_running_reqs")
+            # 聚合 inflight：sum 所有 dp_rank 行
+            total_inflight = 0.0
+            prefix_inflight = "sglang:num_running_reqs{"
+            for ln in lines:
+                if ln.startswith(prefix_inflight):
+                    try:
+                        total_inflight += float(ln.rsplit(" ", 1)[-1])
+                    except Exception:
+                        pass
+            inflight = total_inflight
             queue = _last_float("sglang:num_queue_reqs")
             e2e_sum = _last_float("sglang:e2e_request_latency_seconds_sum")
             e2e_cnt = _last_float("sglang:e2e_request_latency_seconds_count")
