@@ -86,7 +86,7 @@ def reextract_all(results_dir: Path, api_url: str, workers: int, skip_existing: 
         if not md_file.exists():
             skipped += 1
             continue
-        if skip_existing and out_file.exists():
+        if skip_existing and out_file.exists() and out_file.stat().st_size > 0:
             skipped += 1
             continue
         tasks.append((item_dir, md_file, out_file))

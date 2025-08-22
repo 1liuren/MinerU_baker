@@ -287,6 +287,18 @@ class OptimizedPDFPipeline:
         self.data_json_path = data_json_path
         self.batches_per_round = batches_per_round
 
+        # 负载均衡统计（仅当存在多个URL时启用）
+        self._lb_stats: dict[str, dict] = {}
+        self._ewma_alpha: float = 0.2  # EWMA 平滑系数
+        self._default_ewma_ms: float = 8000.0  # 初始估计时延（毫秒）
+        if len(self.server_urls) > 1:
+            for url in self.server_urls:
+                self._lb_stats[url] = {
+                    "ewma_ms": self._default_ewma_ms,
+                    "inflight": 0,
+                    "weight": 1.0,
+                }
+
         # 创建输出目录结构
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -537,23 +549,11 @@ class OptimizedPDFPipeline:
             'dashscope_api_key': os.getenv('DASHSCOPE_API_KEY')  # 显式传递API密钥
         }
         
-        # 准备批次数据
-        # 为每个批次分配server_url
-        import random
-        def pick_url() -> Optional[str]:
-            if not self.server_urls:
-                return self.server_url
-            if self.lb_strategy == "random":
-                return random.choice(self.server_urls)
-            # 默认round robin
-            url = self.server_urls[self._rr_idx % len(self.server_urls)]
-            self._rr_idx += 1
-            return url
-
+        # 准备批次数据（此处不预先分配 server_url，改为提交任务时再择址）
         batch_data_list = []
         for i, batch in enumerate(batches):
             cfg = dict(config)
-            cfg['server_url'] = pick_url()
+            cfg['server_url'] = None
             batch_data_list.append((i, batch, cfg))
         
         # 每轮处理的批次数量（每处理这么多批次后重建进程池）
@@ -576,14 +576,48 @@ class OptimizedPDFPipeline:
                 with ProcessPoolExecutor(max_workers=self.concurrent_batches) as executor:
                     future_to_batch = {}
                     # 提交这一轮的所有批次
+                    import random
                     for batch_data in current_round_data:
-                        batch_idx = batch_data[0]
-                        future = executor.submit(process_batch_worker, batch_data)
-                        future_to_batch[future] = (batch_idx, batch_data[1])
+                        batch_idx, batch_files, cfg = batch_data
+                        # 选择URL（支持 ewma / random / round_robin）
+                        def _choose_url() -> Optional[str]:
+                            if not self.server_urls:
+                                return self.server_url
+                            if self.lb_strategy == "random":
+                                return random.choice(self.server_urls)
+                            if self.lb_strategy == "ewma":
+                                # 选择得分最小的URL：score = (inflight+1) * ewma_ms / weight
+                                best_url = None
+                                best_score = None
+                                for url in self.server_urls:
+                                    st = self._lb_stats.get(url)
+                                    if not st:
+                                        continue
+                                    score = (st["inflight"] + 1) * st["ewma_ms"] / max(st.get("weight", 1.0), 1e-6)
+                                    if best_score is None or score < best_score:
+                                        best_score = score
+                                        best_url = url
+                                return best_url or self.server_urls[0]
+                            # 默认：round robin
+                            url = self.server_urls[self._rr_idx % len(self.server_urls)]
+                            self._rr_idx += 1
+                            return url
+
+                        assigned_url = _choose_url()
+                        cfg2 = dict(cfg)
+                        cfg2['server_url'] = assigned_url
+
+                        # inflight++（仅在多URL时统计）
+                        if assigned_url and assigned_url in self._lb_stats:
+                            self._lb_stats[assigned_url]["inflight"] += 1
+
+                        future = executor.submit(process_batch_worker, (batch_idx, batch_files, cfg2))
+                        # 记录映射以便完成后更新统计
+                        future_to_batch[future] = (batch_idx, batch_files, assigned_url)
 
                     # 收集这一轮的结果
                     for future in as_completed(future_to_batch):
-                        batch_idx, batch_files = future_to_batch[future]
+                        batch_idx, batch_files, assigned_url = future_to_batch[future]
                         try:
                             success, data, parse_time = future.result()
                             if success:
@@ -596,6 +630,11 @@ class OptimizedPDFPipeline:
                                         parse_time,
                                         success=True,
                                     )
+                                # 更新 EWMA（使用批次总耗时作为样本）
+                                if assigned_url and assigned_url in self._lb_stats and parse_time:
+                                    sample_ms = max(parse_time * 1000.0, 1.0)
+                                    st = self._lb_stats[assigned_url]
+                                    st["ewma_ms"] = self._ewma_alpha * sample_ms + (1.0 - self._ewma_alpha) * st["ewma_ms"]
                             else:
                                 for pdf_file in batch_files:
                                     self.status.mark_processed(
@@ -617,6 +656,14 @@ class OptimizedPDFPipeline:
                                     error_msg=f"处理异常: {e}",
                                 )
                         finally:
+                            # inflight--
+                            if assigned_url and assigned_url in self._lb_stats:
+                                try:
+                                    self._lb_stats[assigned_url]["inflight"] = max(
+                                        0, self._lb_stats[assigned_url]["inflight"] - 1
+                                    )
+                                except Exception:
+                                    pass
                             pbar.update(1)
                 
                 logger.info(f"第 {round_num} 轮处理完成，进程池已重建")
