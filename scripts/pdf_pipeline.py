@@ -166,7 +166,15 @@ def process_batch_worker(batch_data):
         if not selected_server_url:
             selected_server_url = config.get('server_url')
         logger.info(f"进程 {os.getpid()}: 批次 {batch_idx + 1} 选用节点: {selected_server_url}")
-        logger.info(f"server_url: {config['server_url']}")
+        logger.info(f"server_url: {config.get('server_url')}")
+        # 若后端为sglang系列且未选出可用server_url，提前报错
+        try:
+            backend_name = str(config.get('backend', '')).lower()
+        except Exception:
+            backend_name = ''
+        if (('sglang' in backend_name) or ('sglang-client' in backend_name)) and not selected_server_url:
+            logger.error("后端为sglang客户端，但未提供可用的server_url；请在初始化时传入 server_url 或 server_urls")
+            return False, [], 0
         
         # 调用do_parse
         parse_start_time = time.time()
@@ -634,7 +642,8 @@ class OptimizedPDFPipeline:
         # 准备配置数据
         config = {
             'backend': self.backend,
-            'server_url': None,
+            'server_url': self.server_url,
+            'server_urls': self.server_urls,
             'lang': self.lang,
             'api_url': self.api_url,
             'results_dir': str(self.results_dir),
@@ -649,7 +658,6 @@ class OptimizedPDFPipeline:
         batch_data_list = []
         for i, batch in enumerate(batches):
             cfg = dict(config)
-            cfg['server_url'] = None
             batch_data_list.append((i, batch, cfg))
         
         # 每轮处理的批次数量（每处理这么多批次后重建进程池）
