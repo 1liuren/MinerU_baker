@@ -132,6 +132,26 @@ def process_batch_worker(batch_data):
                 logger.info("当前各节点负载情况:")
                 for url, inflight in metrics:
                     logger.info(f"  {url}: {inflight} 个请求")
+                # 使用负载倒数作为权重进行加权随机选择，负载越低概率越高
+                weights = []
+                for _, v in metrics:
+                    try:
+                        w = 1.0 / (float(v) + 1.0)
+                    except Exception:
+                        w = 0.0
+                    weights.append(w)
+                total_w = sum(weights)
+                if total_w > 0:
+                    import random as _random
+                    urls_list = [u for u, _ in metrics]
+                    chosen = _random.choices(urls_list, weights=weights, k=1)[0]
+                    try:
+                        probs = [round(w / total_w, 4) for w in weights]
+                        logger.info(f"按权重随机选择节点: {chosen}，概率={dict(zip(urls_list, probs))}")
+                    except Exception:
+                        logger.info(f"按权重随机选择节点: {chosen}")
+                    return chosen
+                # 回退：若权重异常，则选择最小负载
                 min_v = min(v for _, v in metrics)
                 candidates = [u for u, v in metrics if v == min_v]
                 if len(candidates) > 1:
