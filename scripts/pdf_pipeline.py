@@ -22,7 +22,6 @@ from tqdm import tqdm
 from loguru import logger
 import httpx
 import math
-import mmap
 
 from .config import configure_logging, OpenAI, BookMetadata
 from .status_manager import ProcessingStatus
@@ -63,27 +62,17 @@ def process_batch_worker(batch_data):
         lang_list = []
         valid_files = []
         
-        # 读取文件（使用mmap避免将大文件复制到Python堆内存）
-        mapped_files = []  # [(mmap_obj, file_handle)]
+        # 读取文件（使用bytes，兼容pypdfium2的输入要求）
         for pdf_file in batch_files:
             try:
                 file_name = str(pdf_file.stem)
-                f = open(str(pdf_file), 'rb')
-                mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+                pdf_bytes = read_fn(str(pdf_file))
                 file_name_list.append(file_name)
-                pdf_bytes_list.append(mm)
+                pdf_bytes_list.append(pdf_bytes)
                 lang_list.append(config['lang'])
                 valid_files.append(pdf_file)
-                mapped_files.append((mm, f))
             except Exception as e:
                 logger.error(f"进程 {os.getpid()}: 读取文件失败 {pdf_file.name}: {e}")
-                try:
-                    if 'mm' in locals():
-                        mm.close()
-                    if 'f' in locals():
-                        f.close()
-                except Exception:
-                    pass
                 continue
         
         if not pdf_bytes_list:
@@ -201,20 +190,17 @@ def process_batch_worker(batch_data):
         )
         parse_time = time.time() - parse_start_time
         logger.success(f"进程 {os.getpid()}: 批次 {batch_idx + 1} do_parse调用完成，耗时 {format_time(parse_time)}")
-        # 立即关闭mmap与文件句柄并释放大对象，降低驻留内存
+        # 释放大对象，降低驻留内存
         try:
-            for mm, f in mapped_files:
-                try:
-                    mm.close()
-                finally:
-                    try:
-                        f.close()
-                    except Exception:
-                        pass
-            del mapped_files
             del pdf_bytes_list
             del lang_list
             del file_name_list
+        except Exception:
+            pass
+        # 主动触发一次GC以回收解析阶段产生的短期大对象
+        try:
+            import gc as _gc
+            _gc.collect()
         except Exception:
             pass
         
@@ -309,6 +295,18 @@ def process_batch_worker(batch_data):
                 except Exception as e:
                     logger.error(f"进程 {os.getpid()}: 元数据提取失败 {file_info['pdf_file'].name}: {e}")
                     return file_info, {}, str(e)
+                finally:
+                    # 及时释放该任务中的大对象
+                    try:
+                        del content_text
+                        del metadata
+                    except Exception:
+                        pass
+                    try:
+                        import gc as _gc
+                        _gc.collect()
+                    except Exception:
+                        pass
             
             # 使用线程池并行处理
             from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -332,6 +330,13 @@ def process_batch_worker(batch_data):
                     })
             
             logger.success(f"进程 {os.getpid()}: 元数据提取完成，处理了 {len(file_contents)} 个文件")
+            # 清空列表并触发GC，避免在子进程中长期占用内存
+            try:
+                del file_contents
+                import gc as _gc
+                _gc.collect()
+            except Exception:
+                pass
         
         # 清理临时目录与局部变量，尽量释放内存
         try:
@@ -648,7 +653,8 @@ class OptimizedPDFPipeline:
             batch_data_list.append((i, batch, cfg))
         
         # 每轮处理的批次数量（每处理这么多批次后重建进程池）
-        batches_per_round = self.batches_per_round or max(self.concurrent_batches * 10, 200)
+        # 更频繁重建进程池以缓解第三方库潜在的内存泄漏
+        batches_per_round = self.batches_per_round or max(self.concurrent_batches * 4, 40)
         total_batches = len(batches)
         
         logger.info(f"使用多进程分轮次处理 {total_batches} 个批次，最大进程数: {self.concurrent_batches}")
@@ -711,6 +717,12 @@ class OptimizedPDFPipeline:
                         finally:
                             pbar.update(1)
                 logger.success(f"第 {round_num} 轮处理完成")
+                # 在父进程中进行一次显式GC
+                try:
+                    import gc as _gc
+                    _gc.collect()
+                except Exception:
+                    pass
                             
         logger.success(f"所有批次处理完成，总共成功处理 {total_success} 个文件")
         return total_success > 0, []
