@@ -22,6 +22,7 @@ from tqdm import tqdm
 from loguru import logger
 import httpx
 import math
+import mmap
 
 from .config import configure_logging, OpenAI, BookMetadata
 from .status_manager import ProcessingStatus
@@ -62,19 +63,27 @@ def process_batch_worker(batch_data):
         lang_list = []
         valid_files = []
         
-        # 读取文件
+        # 读取文件（使用mmap避免将大文件复制到Python堆内存）
+        mapped_files = []  # [(mmap_obj, file_handle)]
         for pdf_file in batch_files:
             try:
                 file_name = str(pdf_file.stem)
-                pdf_bytes = read_fn(str(pdf_file))
-                
+                f = open(str(pdf_file), 'rb')
+                mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
                 file_name_list.append(file_name)
-                pdf_bytes_list.append(pdf_bytes)
+                pdf_bytes_list.append(mm)
                 lang_list.append(config['lang'])
                 valid_files.append(pdf_file)
-                
+                mapped_files.append((mm, f))
             except Exception as e:
                 logger.error(f"进程 {os.getpid()}: 读取文件失败 {pdf_file.name}: {e}")
+                try:
+                    if 'mm' in locals():
+                        mm.close()
+                    if 'f' in locals():
+                        f.close()
+                except Exception:
+                    pass
                 continue
         
         if not pdf_bytes_list:
@@ -192,14 +201,30 @@ def process_batch_worker(batch_data):
         )
         parse_time = time.time() - parse_start_time
         logger.success(f"进程 {os.getpid()}: 批次 {batch_idx + 1} do_parse调用完成，耗时 {format_time(parse_time)}")
+        # 立即关闭mmap与文件句柄并释放大对象，降低驻留内存
+        try:
+            for mm, f in mapped_files:
+                try:
+                    mm.close()
+                finally:
+                    try:
+                        f.close()
+                    except Exception:
+                        pass
+            del mapped_files
+            del pdf_bytes_list
+            del lang_list
+            del file_name_list
+        except Exception:
+            pass
         
         # 收集处理结果 - 分阶段进行，先收集文件，再并行处理元数据
         file_contents = []
         
-        # 第一阶段：收集所有文件内容
+        # 第一阶段：收集所有文件内容（避免在内存中长期保存大文本）
         for idx, pdf_file in enumerate(valid_files):
             try:
-                file_name = file_name_list[idx]
+                file_name = str(pdf_file.stem)
                 
                 # 查找输出文件
                 if config['backend'] == "pipeline":
@@ -212,37 +237,37 @@ def process_batch_worker(batch_data):
                 json_file = result_dir / f"{file_name}_middle.json"
                 
                 if md_file.exists() and json_file.exists():
-                    # 读取处理结果
-                    with open(md_file, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    with open(json_file, 'r', encoding='utf-8') as f:
-                        middle_json = json.load(f)
-                    
-                    # 清洗markdown内容
-                    try:
-                        content = HTMLToMarkdownConverter.convert_html_in_text(content)
-                    except Exception:
-                        pass
-                    from .utils import clean_markdown_text
-                    cleaned_content = clean_markdown_text(content)
-                    
-                    # 移动文件到最终目录
+                    # 直接落盘：清洗后写入最终 .md，同时中间 json 直接复制，避免将JSON大对象读入内存
                     final_dir = Path(config['results_dir']) / pdf_file.stem
                     final_dir.mkdir(exist_ok=True)
-                    
-                    # 保存清洗后的内容到.md文件
-                    with open(final_dir / f"{pdf_file.stem}.md", 'w', encoding='utf-8') as f:
-                        f.write(cleaned_content)
-                    # 复制middle.json文件
+                    # 清洗并写入 .md
+                    try:
+                        with open(md_file, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        try:
+                            content = HTMLToMarkdownConverter.convert_html_in_text(content)
+                        except Exception:
+                            pass
+                        from .utils import clean_markdown_text
+                        cleaned_content = clean_markdown_text(content)
+                        with open(final_dir / f"{pdf_file.stem}.md", 'w', encoding='utf-8') as f:
+                            f.write(cleaned_content)
+                    finally:
+                        try:
+                            del content
+                            del cleaned_content
+                        except Exception:
+                            pass
+                    # 复制 middle.json（不读入内存）
                     shutil.copy2(json_file, final_dir / f"{pdf_file.stem}_middle.json")
                     
-                    # 收集文件信息，准备并行处理元数据
+                    # 仅存储必要的路径信息，供后续并行提取元数据时按需读取文件
                     file_contents.append({
                         "pdf_file": pdf_file,
-                        "content": cleaned_content,
                         "file_name": file_name,
                         "idx": idx,
-                        "final_dir": final_dir
+                        "final_dir": final_dir,
+                        "md_path": str(final_dir / f"{pdf_file.stem}.md")
                     })
                     
                 else:
@@ -263,9 +288,14 @@ def process_batch_worker(batch_data):
                     from pathlib import Path
                     sys.path.insert(0, str(Path(__file__).parent))
                     from utils import extract_metadata_with_llm
-                    
+                    # 按需从磁盘读取已清洗的 .md 内容，避免在主流程中长期占用内存
+                    md_path = file_info.get("md_path")
+                    content_text = ""
+                    if md_path and os.path.exists(md_path):
+                        with open(md_path, 'r', encoding='utf-8') as _f:
+                            content_text = _f.read()
                     api_url = config.get('api_url', 'https://dashscope.aliyuncs.com/compatible-mode/v1')
-                    metadata = extract_metadata_with_llm(file_info["content"], api_url)
+                    metadata = extract_metadata_with_llm(content_text, api_url)
                     
                     # 保存元数据到单独的JSON文件
                     if not metadata:
