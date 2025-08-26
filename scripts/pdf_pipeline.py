@@ -335,7 +335,8 @@ def process_batch_worker(batch_data):
                     
                     # 仅返回必要的最小信息以减少跨进程传输负载
                     processed_data.append({
-                        "pdf_file": file_info["pdf_file"]
+                        "pdf_file": file_info["pdf_file"],
+                        "server_url": selected_server_url  # 添加服务器URL信息用于统计
                     })
             
             logger.success(f"进程 {os.getpid()}: 元数据提取完成，处理了 {len(file_contents)} 个文件")
@@ -423,7 +424,11 @@ class OptimizedPDFPipeline:
         
         # 状态管理
         self.status = ProcessingStatus(self.output_dir / "processing_status.json")
-        
+
+        # 节点统计管理
+        from collections import defaultdict
+        self.node_stats = defaultdict(int)  # 记录每个节点的选用次数
+
         # HTML转换器
         self.html_converter = HTMLToMarkdownConverter()
         
@@ -703,6 +708,21 @@ class OptimizedPDFPipeline:
                                         parse_time,
                                         success=True,
                                     )
+
+                                    # 节点统计
+                                    server_url = item.get("server_url")
+                                    if server_url:
+
+                                        node_id = server_url
+
+                                        self.node_stats[node_id] += 1
+
+                                        # 输出当前统计
+                                        total_selections = sum(self.node_stats.values())
+                                        logger.info(f"节点选用统计 (累计):")
+                                        for node, count in sorted(self.node_stats.items(), key=lambda x: x[1], reverse=True):
+                                            percentage = (count / total_selections * 100) if total_selections > 0 else 0
+                                            logger.info(f"  {node}: {count} 次 ({percentage:.1f}%)")
                             else:
                                 for pdf_file in batch_files:
                                     self.status.mark_processed(
@@ -896,7 +916,16 @@ class OptimizedPDFPipeline:
             logger.info(f"  - 失败: {stats['failed']}")
             logger.info(f"输出目录: {self.results_dir}")
             logger.info(f"保留文件: .md (清洗后内容) + .json (middle数据)")
-            
+
+            # 输出节点统计信息
+            if self.node_stats:
+                logger.info(f"\n节点选用统计 (最终):")
+                total_selections = sum(self.node_stats.values())
+                for node, count in sorted(self.node_stats.items(), key=lambda x: x[1], reverse=True):
+                    percentage = (count / total_selections * 100) if total_selections > 0 else 0
+                    logger.info(f"  {node}: {count} 次 ({percentage:.1f}%)")
+                logger.info(f"总节点调用: {total_selections}")
+
             return True
             
         except KeyboardInterrupt:
