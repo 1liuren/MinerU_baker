@@ -86,13 +86,13 @@ def parse_args():
     parser.add_argument(
         "--batch-size", 
         type=int, 
-        default=100, 
+        default=1, 
         help="每批次处理的文件数量 (默认: 100)"
     )
     parser.add_argument(
         "--concurrent-batches", 
         type=int, 
-        default=4, 
+        default=10, 
         help="同时处理的批次数量 (默认: 4)"
     )
     parser.add_argument(
