@@ -215,11 +215,15 @@ class IndividualJsonlGenerator:
         total_count = 0
 
         # 遍历所有PDF子目录
-        for pdf_dir in sorted(self.input_dir.iterdir()):
-            if pdf_dir.is_dir():
-                total_count += 1
-                if self.process_single_pdf(pdf_dir):
-                    success_count += 1
+        pdf_dirs = [d for d in sorted(self.input_dir.iterdir()) if d.is_dir()]
+        total_count = len(pdf_dirs)
+        
+        from tqdm import tqdm
+        pbar = tqdm(pdf_dirs, desc="处理PDF文件", unit="个")
+        for pdf_dir in pbar:
+            if self.process_single_pdf(pdf_dir):
+                success_count += 1
+                pbar.set_postfix({"成功": f"{success_count}/{total_count}"})
 
         logger.info(f"处理完成: {success_count}/{total_count} 成功")
         return success_count, total_count
