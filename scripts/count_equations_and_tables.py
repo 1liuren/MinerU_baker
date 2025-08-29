@@ -9,6 +9,7 @@ import json
 import argparse
 from pathlib import Path
 from typing import Dict, List, Tuple
+from tqdm import tqdm
 
 
 def count_special_blocks_in_structure(data_structure, counts: Dict[str, int]):
@@ -85,17 +86,19 @@ def analyze_results_directory(results_dir: str, top_n: int = 10) -> List[Tuple[s
     results_dir_path = Path(results_dir)
     pdf_stats = []
 
-    # 遍历所有子目录
-    for subdir in results_dir_path.iterdir():
-        if subdir.is_dir():
-            # 查找_middle.json文件
-            middle_json = subdir / f"{subdir.name}_middle.json"
-            if middle_json.exists():
-                print(f"正在处理: {subdir.name}")
-                counts = count_special_blocks(str(middle_json))
-                pdf_stats.append((subdir.name, counts))
-            else:
-                print(f"警告: 在 {subdir.name} 中未找到 _middle.json 文件")
+    # 获取所有子目录总数
+    subdirs = [d for d in results_dir_path.iterdir() if d.is_dir()]
+    
+    # 使用tqdm显示进度
+    for subdir in tqdm(subdirs, desc="正在处理PDF文件"):
+        # 查找_middle.json文件
+        middle_json = subdir / f"{subdir.name}_middle.json"
+        if middle_json.exists():
+            counts = count_special_blocks(str(middle_json))
+            pdf_stats.append((subdir.name, counts))
+        else:
+            print(f"警告: 在 {subdir.name} 中未找到 _middle.json 文件")
+
 
     # 按总数量降序排序
     pdf_stats.sort(key=lambda x: x[1]['total'], reverse=True)
