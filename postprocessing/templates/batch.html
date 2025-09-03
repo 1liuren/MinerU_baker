@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF图像截取器 - 批量处理</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .nav-links {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .nav-links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 15px;
+            padding: 8px 16px;
+            border: 1px solid #007bff;
+            border-radius: 4px;
+        }
+        .nav-links a:hover {
+            background-color: #007bff;
+            color: white;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="text"], textarea {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        input[type="text"]:focus, textarea:focus {
+            border-color: #007bff;
+            outline: none;
+        }
+        textarea {
+            height: 80px;
+            resize: vertical;
+        }
+        .btn {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+        .btn:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .progress {
+            display: none;
+            margin-top: 20px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #007bff;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            display: none;
+        }
+        .result.success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .result.error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .form-text {
+            color: #6c757d;
+            font-size: 12px;
+            margin-top: 5px;
+            display: block;
+        }
+        .example-box {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        .example-box h4 {
+            margin-top: 0;
+            color: #495057;
+        }
+        .book-result {
+            background-color: #f8f9fa;
+            border-left: 4px solid #007bff;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        .book-result.success {
+            border-left-color: #28a745;
+        }
+        .book-result.failed {
+            border-left-color: #dc3545;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+            border: 1px solid #dee2e6;
+        }
+        .stat-number {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            color: #6c757d;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PDF图像截取器 - 批量处理</h1>
+        
+        <div class="nav-links">
+            <a href="/">单文件处理</a>
+            <a href="/batch">批量处理</a>
+            <a href="/api">API文档</a>
+        </div>
+        
+        <form id="batchForm">
+            <div class="form-group">
+                <label for="resultsFolder">结果文件夹路径</label>
+                <input type="text" id="resultsFolder" name="results_folder" required value="/home/zhoujuncheng/2025自有库_0807_sglang/results">
+                <small class="form-text">包含书籍结果的根目录，每个子文件夹代表一本书籍，包含对应的JSON文件（书籍名称_middle.json）</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="pdfBaseFolder">PDF搜索基础目录</label>
+                <input type="text" id="pdfBaseFolder" name="pdf_base_folder" required value="/home/zhoujuncheng/mineru_pdf/xyzhwb/oss-cn-huhehaote.aliyuncs.com">
+                <small class="form-text">PDF文件的基础搜索目录，系统将在此目录下递归搜索与书籍名称匹配的PDF文件</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="outputBaseDir">输出基础目录（可选）</label>
+                <input type="text" id="outputBaseDir" name="output_base_dir" value="/home/zhoujuncheng/batch_output">
+                <small class="form-text">批量处理结果的输出基础目录，留空将在结果文件夹下创建batch_output目录</small>
+            </div>
+            
+            <div class="form-group" id="resumeGroup" style="display: none;">
+                <label for="resumeTaskId">恢复任务ID（可选）</label>
+                <input type="text" id="resumeTaskId" name="resume_task_id" placeholder="输入要恢复的任务ID">
+                <small class="form-text">如果需要恢复中断的任务，请输入任务ID</small>
+            </div>
+            
+            <div class="form-options">
+                <label>
+                    <input type="checkbox" id="enableMultiprocess" checked> 启用多进程处理 (最多 32 个进程)
+                </label>
+                <label>
+                    <input type="checkbox" id="enableResume" onchange="toggleResumeInput()"> 恢复中断的任务
+                </label>
+                <label>
+                    <input type="checkbox" id="enableSmartResume" checked> 智能跳过已处理文件
+                </label>
+            </div>
+            
+            <div class="info-box" id="smartResumeInfo">
+                <h4>💡 智能恢复说明：</h4>
+                <p>启用后，系统会自动检查输出目录中已完成的书籍，跳过已有的处理结果，从未处理的书籍开始继续执行。这样可以：</p>
+                <ul>
+                    <li>✅ 避免重复处理已完成的书籍</li>
+                    <li>✅ 自动恢复意外中断的批量任务</li>
+                    <li>✅ 支持增量处理新增的书籍</li>
+                    <li>🚀 按需PDF搜索：每个进程独立搜索自己的书籍，充分利用多线程优势</li>
+                    <li>⚡ 精确搜索：直接使用书籍名称搜索，避免全量缓存构建时间</li>
+                </ul>
+            </div>
+            
+            <div class="example-box">
+                <h4>文件夹结构示例：</h4>
+                <pre>
+结果文件夹/
+├── 书籍1/
+│   └── 书籍1_middle.json
+├── 书籍2/
+│   └── 书籍2_middle.json
+└── 书籍3/
+    └── 书籍3_middle.json
+
+PDF搜索基础目录/
+├── 20250807/
+├── 20250815/
+├── 20250818/
+└── 20250819/
+    └── 000005/
+        └── 工业技术相关书籍数据集成/
+            └── 原子能技术/
+                └── zh/
+                    └── 书籍1.pdf
+
+使用find命令搜索PDF: find ./ -name "书籍名称*"
+                </pre>
+            </div>
+            
+            <button type="submit" class="btn" id="submitBtn">开始批量处理</button>
+        </form>
+        
+        <div class="progress" id="progress">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+                <div class="progress-percentage" id="progressPercentage">0%</div>
+            </div>
+            <p id="progressText">正在检测书籍数量...</p>
+            <div class="progress-stats" id="progressStats"></div>
+            <div class="progress-details" id="progressDetails">
+                <div class="current-book" id="currentBook"></div>
+                <div class="task-info" id="taskInfo"></div>
+                <div class="estimated-time" id="estimatedTime"></div>
+            </div>
+            <div class="task-controls" id="taskControls" style="display: none;">
+                <button class="btn btn-warning" onclick="cancelTask(false)">🛑 取消任务</button>
+                <button class="btn btn-danger" onclick="cancelTask(true)">⚠️ 强制中断</button>
+                <button class="btn btn-info" onclick="viewTaskList()">📋 查看所有任务</button>
+            </div>
+        </div>
+        
+        <div class="result" id="result"></div>
+    </div>
+
+    <script>
+        let currentTaskId = null;
+        let progressTimer = null;
+        
+        // 切换恢复输入框显示
+        function toggleResumeInput() {
+            const enableResume = document.getElementById('enableResume').checked;
+            const resumeGroup = document.getElementById('resumeGroup');
+            resumeGroup.style.display = enableResume ? 'block' : 'none';
+        }
+        
+        // 实时更新任务进度
+        async function updateTaskProgress(taskId) {
+            try {
+                const response = await fetch(`/task-status/${taskId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // 更新进度条
+                    document.getElementById('progressFill').style.width = data.progress_percentage + '%';
+                    document.getElementById('progressPercentage').textContent = data.progress_percentage.toFixed(1) + '%';
+                    
+                    // 更新文本
+                    document.getElementById('progressText').textContent = 
+                        `状态: ${getStatusText(data.status)} - 已完成 ${data.processed_books}/${data.total_books} 本书籍`;
+                    
+                    // 更新当前书籍
+                    document.getElementById('currentBook').textContent = 
+                        data.current_book ? `当前: ${data.current_book}` : '';
+                    
+                    // 更新任务信息
+                    document.getElementById('taskInfo').textContent = `任务ID: ${data.task_id}`;
+                    
+                    // 更新预计剩余时间
+                    if (data.estimated_remaining) {
+                        const minutes = Math.floor(data.estimated_remaining / 60);
+                        const seconds = Math.floor(data.estimated_remaining % 60);
+                        document.getElementById('estimatedTime').textContent = 
+                            `预计剩余: ${minutes}分${seconds}秒`;
+                    }
+                    
+                    // 如果任务完成，停止定时器
+                    if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
+                        clearInterval(progressTimer);
+                        document.getElementById('taskControls').style.display = 'none';
+                        
+                        if (data.status === 'completed') {
+                            // 获取最终结果
+                            setTimeout(() => location.reload(), 2000);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('更新进度失败:', error);
+            }
+        }
+        
+        function getStatusText(status) {
+            const statusMap = {
+                'pending': '待处理',
+                'running': '运行中',
+                'completed': '已完成',
+                'failed': '失败',
+                'cancelled': '已取消'
+            };
+            return statusMap[status] || status;
+        }
+        
+        // 取消任务
+        async function cancelTask(force = false) {
+            if (!currentTaskId) return;
+            
+            const confirmMessage = force 
+                ? '确定要强制中断任务吗？这会立即终止所有正在运行的进程，可能导致数据不完整。'
+                : '确定要取消任务吗？正在处理中的书籍会完成，但不会开始新的处理。';
+            
+            if (!confirm(confirmMessage)) {
+                return;
+            }
+            
+            try {
+                const url = force 
+                    ? `/cancel-task/${currentTaskId}?force=true`
+                    : `/cancel-task/${currentTaskId}`;
+                
+                const response = await fetch(url, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // 显示取消结果
+                    const messageType = force ? 'warning' : 'info';
+                    showResult(messageType, `
+                        <h3>${force ? '⚠️ 强制中断完成' : '🛑 任务取消完成'}</h3>
+                        <p>${data.message}</p>
+                        <p><strong>任务ID:</strong> ${data.task_id}</p>
+                        ${data.force_cancelled ? '<p style="color: #dc3545;"><strong>注意:</strong> 已强制中断所有进程</p>' : ''}
+                    `);
+                    
+                    // 停止进度更新
+                    clearInterval(progressTimer);
+                    document.getElementById('taskControls').style.display = 'none';
+                    document.getElementById('progressText').textContent = force ? '任务已强制中断' : '任务已取消';
+                    
+                } else {
+                    const errorData = await response.json();
+                    alert(`取消失败: ${errorData.detail}`);
+                }
+            } catch (error) {
+                console.error('取消任务失败:', error);
+                alert(`取消任务时发生错误: ${error.message}`);
+            }
+        }
+        
+        // 查看任务列表
+        async function viewTaskList() {
+            try {
+                const response = await fetch('/list-tasks');
+                if (response.ok) {
+                    const data = await response.json();
+                    let taskListHtml = '<h3>任务列表</h3><ul>';
+                    
+                    data.tasks.forEach(task => {
+                        const startTime = new Date(task.start_time * 1000).toLocaleString();
+                        taskListHtml += `<li>
+                            <strong>ID:</strong> ${task.task_id.substring(0, 8)}...<br>
+                            <strong>状态:</strong> ${getStatusText(task.status)}<br>
+                            <strong>进度:</strong> ${task.processed_books}/${task.total_books} (${task.progress_percentage.toFixed(1)}%)<br>
+                            <strong>开始时间:</strong> ${startTime}<br>
+                            <strong>消息:</strong> ${task.message}
+                        </li>`;
+                    });
+                    
+                    taskListHtml += '</ul>';
+                    document.getElementById('result').innerHTML = taskListHtml;
+                    document.getElementById('result').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('获取任务列表失败:', error);
+            }
+        }
+        
+        // 表单提交
+        document.getElementById('batchForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const progress = document.getElementById('progress');
+            const result = document.getElementById('result');
+            const resultsFolder = document.getElementById('resultsFolder').value;
+            
+            // 禁用提交按钮
+            submitBtn.disabled = true;
+            submitBtn.textContent = '处理中...';
+            
+            // 显示进度条
+            progress.style.display = 'block';
+            result.style.display = 'none';
+            
+            // 先获取子目录数量和已处理状态
+            let totalBooks = 0;
+            let processedBooks = 0;
+            let alreadyProcessed = 0;
+            
+            try {
+                // 检查智能恢复是否启用
+                const enableSmartResume = document.getElementById('enableSmartResume').checked;
+                
+                if (enableSmartResume) {
+                    // 检查已处理的书籍
+                    const checkResponse = await fetch(`/check-processed-books?results_folder=${encodeURIComponent(resultsFolder)}&output_base_dir=${encodeURIComponent(outputBaseDir)}`);
+                    if (checkResponse.ok) {
+                        const checkData = await checkResponse.json();
+                        totalBooks = checkData.total_books;
+                        alreadyProcessed = checkData.processed_books;
+                        
+                        console.log(`发现 ${totalBooks} 本书籍，其中 ${alreadyProcessed} 本已处理`);
+                        
+                        // 显示智能恢复信息
+                        if (alreadyProcessed > 0) {
+                            document.getElementById('progressText').textContent = 
+                                `智能恢复: 跳过 ${alreadyProcessed} 本已处理的书籍，开始处理剩余 ${checkData.pending_books} 本...`;
+                        } else {
+                            document.getElementById('progressText').textContent = `准备处理 ${totalBooks} 本书籍，PDF文件将在处理时按需搜索...`;
+                        }
+                        
+                        document.getElementById('progressStats').innerHTML = `
+                            <div style="text-align: center; margin-top: 10px; color: #6c757d;">
+                                已完成: <span id="processedCount">${alreadyProcessed}</span> / ${totalBooks}
+                                ${alreadyProcessed > 0 ? `<br><small style="color: #28a745;">✅ 智能跳过 ${alreadyProcessed} 本已处理书籍</small>` : ''}
+                            </div>
+                        `;
+                        
+                        // 如果有已处理的书籍，显示完成百分比
+                        if (alreadyProcessed > 0) {
+                            const percentage = checkData.completion_percentage;
+                            document.getElementById('progressFill').style.width = percentage + '%';
+                            document.getElementById('progressPercentage').textContent = percentage.toFixed(1) + '%';
+                        }
+                    }
+                } else {
+                    // 常规模式，只获取总数
+                    const countResponse = await fetch(`/get-subdirs-count?results_folder=${encodeURIComponent(resultsFolder)}`);
+                    if (countResponse.ok) {
+                        const countData = await countResponse.json();
+                        totalBooks = countData.total_books;
+                        console.log(`发现 ${totalBooks} 本书籍待处理`);
+                        
+                        document.getElementById('progressText').textContent = `准备处理 ${totalBooks} 本书籍，PDF文件将在处理时按需搜索...`;
+                        document.getElementById('progressStats').innerHTML = `
+                            <div style="text-align: center; margin-top: 10px; color: #6c757d;">
+                                已完成: <span id="processedCount">0</span> / ${totalBooks}
+                            </div>
+                        `;
+                    }
+                }
+            } catch (error) {
+                console.warn('获取书籍信息失败，使用默认进度显示');
+                document.getElementById('progressText').textContent = '开始处理...';
+            }
+            
+            // 根据总书籍数量设置进度条
+            let progressValue = 0;
+            let estimatedProcessedBooks = 0;
+            const progressInterval = setInterval(() => {
+                if (totalBooks > 0) {
+                    // 缓慢递增估算的已处理书籍数量
+                    const maxEstimated = Math.min(totalBooks * 0.9, totalBooks - 1); // 最多到90%或总数-1
+                    if (estimatedProcessedBooks < maxEstimated) {
+                        estimatedProcessedBooks += 0.05; // 每次增加0.05本书
+                    }
+                    
+                    // 基于估算的进度
+                    const targetProgress = Math.min((estimatedProcessedBooks / totalBooks) * 90, 90);
+                    progressValue += (targetProgress - progressValue) * 0.2;
+                    
+                    // 更新计数显示
+                    const processedCountElement = document.getElementById('processedCount');
+                    if (processedCountElement) {
+                        processedCountElement.textContent = Math.floor(estimatedProcessedBooks);
+                    }
+                } else {
+                    // 回退到模拟进度
+                    progressValue += Math.random() * 2;
+                    if (progressValue > 90) progressValue = 90;
+                }
+                document.getElementById('progressFill').style.width = progressValue + '%';
+            }, 500);
+            
+            try {
+                const formData = new FormData();
+                formData.append('results_folder', document.getElementById('resultsFolder').value);
+                formData.append('pdf_base_folder', document.getElementById('pdfBaseFolder').value);
+                
+                const outputBaseDir = document.getElementById('outputBaseDir').value;
+                if (outputBaseDir) {
+                    formData.append('output_base_dir', outputBaseDir);
+                }
+                
+                // 恢复任务ID
+                const resumeTaskId = document.getElementById('resumeTaskId').value;
+                if (resumeTaskId) {
+                    formData.append('resume_task_id', resumeTaskId);
+                }
+                
+                // 选择API版本
+                const useMultiprocess = document.getElementById('enableMultiprocess').checked;
+                const apiEndpoint = useMultiprocess ? '/batch-process-v3' : '/batch-process-v2';
+                
+                const response = await fetch(apiEndpoint, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                clearInterval(progressInterval);
+                document.getElementById('progressFill').style.width = '100%';
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // 如果是V3 API且返回了task_id，启动实时进度更新
+                    if (data.task_id && useMultiprocess) {
+                        currentTaskId = data.task_id;
+                        document.getElementById('taskControls').style.display = 'block';
+                        document.getElementById('progressText').textContent = '任务已启动，正在实时更新进度...';
+                        
+                        // 开始实时更新进度
+                        progressTimer = setInterval(() => {
+                            updateTaskProgress(currentTaskId);
+                        }, 2000); // 每2秒更新一次
+                        
+                        // 立即更新一次
+                        updateTaskProgress(currentTaskId);
+                        
+                    } else {
+                        // V2 API的传统处理方式
+                        processedBooks = data.processed_books;
+                        
+                        const processedCountElement = document.getElementById('processedCount');
+                        if (processedCountElement && totalBooks > 0) {
+                            processedCountElement.textContent = processedBooks;
+                        }
+                        document.getElementById('progressText').textContent = `批量处理完成！`;
+                        
+                        showBatchResult('success', data);
+                    }
+                } else {
+                    const errorData = await response.json();
+                    document.getElementById('progressText').textContent = '处理失败';
+                    showResult('error', `
+                        <h3>❌ 批量处理失败</h3>
+                        <p>${errorData.detail}</p>
+                    `);
+                }
+            } catch (error) {
+                clearInterval(progressInterval);
+                showResult('error', `
+                    <h3>批量处理失败</h3>
+                    <p><strong>错误:</strong> ${error.message}</p>
+                `);
+            } finally {
+                // 恢复提交按钮
+                submitBtn.disabled = false;
+                submitBtn.textContent = '开始批量处理';
+            }
+        });
+        
+        function showResult(type, content) {
+            const result = document.getElementById('result');
+            result.className = `result ${type}`;
+            result.innerHTML = content;
+            result.style.display = 'block';
+        }
+        
+        function showBatchResult(type, data) {
+            const result = document.getElementById('result');
+            result.className = `result ${type}`;
+            
+            let content = `
+                <h3>🎉 批量处理完成</h3>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-number">${data.processed_books}</div>
+                        <div class="stat-label">成功处理</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${data.total_books}</div>
+                        <div class="stat-label">总书籍数</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${data.failed_books.length}</div>
+                        <div class="stat-label">处理失败</div>
+                    </div>
+                </div>
+            `;
+            
+            // 只显示最新的5个处理结果
+            if (data.results && data.results.length > 0) {
+                const recentResults = data.results.slice(-5);  // 最新的5个
+                content += '<h4>最新处理结果：</h4>';
+                recentResults.forEach(book => {
+                    const status = book.success ? '✅' : '❌';
+                    content += `
+                        <div class="book-result-simple">
+                            ${status} <strong>${book.book_name}</strong>: `;
+                    if (book.success) {
+                        content += `${book.targets_processed} 个目标, ${book.images_saved} 张图片`;
+                    } else {
+                        content += book.message;
+                    }
+                    content += `</div>`;
+                });
+                
+                if (data.results.length > 5) {
+                    content += `<p style="color: #6c757d; font-size: 14px;">...以及其他 ${data.results.length - 5} 个结果</p>`;
+                }
+            }
+            
+            result.innerHTML = content;
+            result.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

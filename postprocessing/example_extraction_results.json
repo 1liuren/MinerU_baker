@@ -1,0 +1,56 @@
+{
+  "pdf_path": "miner_master/demo/output/demo1/vlm/demo1_origin.pdf",
+  "json_source": "miner_master/demo/output/demo1/vlm/demo1_middle.json",
+  "extraction_time": "2024-01-01 12:00:00",
+  "total_targets": 5,
+  "processed_targets": 5,
+  "saved_images": [
+    "miner_master/demo/output/demo1/vlm/image/page_0_span_0.png",
+    "miner_master/demo/output/demo1/vlm/image/page_0_span_1.png",
+    "miner_master/demo/output/demo1/vlm/image/page_0_span_2.png",
+    "miner_master/demo/output/demo1/vlm/image/page_1_span_0.png",
+    "miner_master/demo/output/demo1/vlm/image/page_1_span_1.png"
+  ],
+  "targets": [
+    {
+      "id": "page_0_span_0",
+      "type": "span_inline_equation",
+      "text": "E = mc²",
+      "bbox": [45.6, 123.4, 89.2, 145.8],
+      "page_idx": 0,
+      "image_path": "miner_master/demo/output/demo1/vlm/image/page_0_span_0.png"
+    },
+    {
+      "id": "page_0_span_1",
+      "type": "span_table",
+      "text": "<table><tr><td>参数</td><td>值</td><td>单位</td></tr><tr><td>质量</td><td>1.0</td><td>kg</td></tr><tr><td>速度</td><td>3.0×10⁸</td><td>m/s</td></tr></table>",
+      "bbox": [67.3, 156.7, 234.1, 298.9],
+      "page_idx": 0,
+      "image_path": "miner_master/demo/output/demo1/vlm/image/page_0_span_1.png"
+    },
+    {
+      "id": "page_0_span_2",
+      "type": "span_interline_equation",
+      "text": "∫ f(x) dx = F(x) + C",
+      "bbox": [89.5, 312.4, 345.6, 378.2],
+      "page_idx": 0,
+      "image_path": "miner_master/demo/output/demo1/vlm/image/page_0_span_2.png"
+    },
+    {
+      "id": "page_1_span_0",
+      "type": "span_table",
+      "text": "<table><tr><th>实验编号</th><th>结果</th><th>误差</th></tr><tr><td>001</td><td>0.987</td><td>±0.002</td></tr><tr><td>002</td><td>0.991</td><td>±0.001</td></tr></table>",
+      "bbox": [45.2, 89.6, 456.7, 234.1],
+      "page_idx": 1,
+      "image_path": "miner_master/demo/output/demo1/vlm/image/page_1_span_0.png"
+    },
+    {
+      "id": "page_1_span_1",
+      "type": "span_inline_equation",
+      "text": "α + β = γ",
+      "bbox": [123.4, 345.6, 234.5, 367.8],
+      "page_idx": 1,
+      "image_path": "miner_master/demo/output/demo1/vlm/image/page_1_span_1.png"
+    }
+  ]
+}
