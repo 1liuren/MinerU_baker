@@ -1,0 +1,957 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+PDF图像截取器 - 核心功能模块
+只保留命令行批量处理的核心功能，移除所有Web相关代码
+
+功能：根据JSON文件中的bbox坐标从PDF中截取图像
+作者：AI Assistant
+版本：2.0.0 (简化版)
+"""
+
+import os
+import json
+import fitz  # PyMuPDF
+from pathlib import Path
+from typing import List, Dict, Optional, Union
+from dataclasses import dataclass
+import logging
+import shutil
+import time
+import fnmatch
+import pickle
+import uuid
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
+import threading
+
+# 进度条支持
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    # 简单的进度显示替代方案
+    class tqdm:
+        def __init__(self, iterable=None, total=None, desc=None, **kwargs):
+            self.iterable = iterable
+            self.total = total or (len(iterable) if iterable else 0)
+            self.desc = desc or ""
+            self.current = 0
+            if desc:
+                print(f"{desc}: 开始处理...")
+        
+        def __iter__(self):
+            if self.iterable:
+                for item in self.iterable:
+                    yield item
+                    self.update(1)
+            return self
+        
+        def __enter__(self):
+            return self
+        
+        def __exit__(self, *args):
+            if self.desc:
+                print(f"\n{self.desc}: 完成!")
+        
+        def update(self, n=1):
+            self.current += n
+            if self.total > 0:
+                percent = (self.current / self.total) * 100
+                print(f"\r{self.desc}: {self.current}/{self.total} ({percent:.1f}%)", end="", flush=True)
+        
+        def set_description(self, desc):
+            self.desc = desc
+        
+        def set_postfix(self, postfix_dict):
+            pass
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# 全局配置
+MAX_WORKERS = min(multiprocessing.cpu_count(), 32)
+PROGRESS_CHECK_INTERVAL = 1
+
+# 任务状态存储
+task_status_store = {}
+task_lock = threading.Lock()
+
+@dataclass
+class TaskProgress:
+    """任务进度信息"""
+    task_id: str
+    total_books: int = 0
+    processed_books: int = 0
+    current_book: str = ""
+    status: str = "pending"  # pending, running, completed, failed, cancelled
+    message: str = ""
+    results: List[Dict] = None
+    start_time: float = 0
+    end_time: float = 0
+    checkpoint_file: str = ""
+    
+    def __post_init__(self):
+        if self.results is None:
+            self.results = []
+
+@dataclass 
+class BookTask:
+    """单本书籍处理任务"""
+    book_name: str
+    json_file_path: str
+    pdf_path: Optional[str]
+    output_dir: str
+    task_id: str
+    pdf_base_folder: Optional[str] = None
+
+@dataclass
+class TargetInfo:
+    """目标信息"""
+    id: str
+    type: str
+    text: str
+    bbox: List[float]
+    page_idx: int
+    path: Optional[str] = None
+
+@dataclass
+class ProcessResult:
+    """处理结果"""
+    success: bool
+    message: str
+    saved_images: List[str]
+    total_targets: int
+    processed_targets: int
+
+@dataclass
+class BatchResult:
+    """批量处理结果"""
+    success: bool
+    message: str
+    total_books: int
+    processed_books: int
+    failed_books: List[str]
+    results: List[Dict]
+    task_id: Optional[str] = None
+
+
+class PDFImageExtractor:
+    """PDF图像截取器"""
+    
+    def __init__(self, pdf_path: str):
+        """初始化PDF图像截取器"""
+        self.pdf_path = pdf_path
+        self.doc = None
+        self._open_pdf()
+    
+    def _open_pdf(self):
+        """打开PDF文件"""
+        try:
+            self.doc = fitz.open(self.pdf_path)
+            logger.info(f"成功打开PDF文件: {self.pdf_path}")
+        except Exception as e:
+            raise Exception(f"无法打开PDF文件 {self.pdf_path}: {e}")
+    
+    def extract_image_by_bbox(self, page_idx: int, bbox: List[float], output_path: str) -> bool:
+        """根据bbox坐标从指定页截取图像"""
+        try:
+            if page_idx >= len(self.doc):
+                logger.error(f"页码 {page_idx} 超出范围，PDF总页数: {len(self.doc)}")
+                return False
+            
+            # 获取指定页面
+            page = self.doc[page_idx]
+            
+            # 创建矩形区域
+            rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
+            
+            # 获取缩放因子（默认2.0）
+            scale_factor = 2.0
+            
+            # 截取图像
+            pix = page.get_pixmap(clip=rect, matrix=fitz.Matrix(scale_factor, scale_factor))
+            
+            # 确保输出目录存在
+            output_dir = Path(output_path).parent
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 保存图像
+            pix.save(output_path)
+            logger.debug(f"成功截取图像: {output_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"截取图像失败: {e}")
+            return False
+    
+    def close(self):
+        """关闭PDF文档"""
+        if self.doc:
+            self.doc.close()
+
+
+def get_target_types() -> set:
+    """获取目标类型配置"""
+    try:
+        from config import get_target_types
+        return get_target_types()
+    except ImportError:
+        # 默认目标类型
+        return {"interline_equation", "table"}
+
+
+def parse_json_file(json_path: str) -> Dict:
+    """解析JSON文件"""
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        logger.debug(f"成功解析JSON文件: {json_path}")
+        return data
+    except Exception as e:
+        raise Exception(f"无法解析JSON文件 {json_path}: {e}")
+
+
+def extract_targets_from_json(json_data: Dict) -> List[TargetInfo]:
+    """从JSON数据中提取目标信息"""
+    targets = []
+    target_types = get_target_types()
+    
+    try:
+        if 'pdf_info' in json_data:
+            pdf_info = json_data['pdf_info']
+            
+            for page_idx, page_data in enumerate(pdf_info):
+                if 'para_blocks' in page_data:
+                    for block in page_data['para_blocks']:
+                        # 处理嵌套结构
+                        lines_list = []
+                        if 'blocks' in block:
+                            for nested_block in block['blocks']:
+                                if 'lines' in nested_block:
+                                    lines_list.extend(nested_block['lines'])
+                        elif 'lines' in block:
+                            lines_list = block['lines']
+                        
+                        # 处理lines中的spans
+                        for line in lines_list:
+                            if 'spans' in line:
+                                for span_idx, span in enumerate(line['spans']):
+                                    if 'bbox' in span and 'type' in span:
+                                        span_type = span.get('type', '')
+                                        if span_type in target_types:
+                                            # 根据类型选择不同的文本字段
+                                            if span_type == 'table':
+                                                text_content = span.get('html', '')
+                                            else:
+                                                text_content = span.get('content', '')
+                                            
+                                            target = TargetInfo(
+                                                id=f"page_{page_idx}_span_{span_type}_{span_idx}",
+                                                type=f"span_{span_type}",
+                                                text=text_content,
+                                                bbox=span['bbox'],
+                                                page_idx=page_idx
+                                            )
+                                            targets.append(target)
+        
+        logger.info(f"从JSON中提取了 {len(targets)} 个目标")
+        return targets
+        
+    except Exception as e:
+        logger.error(f"提取目标信息失败: {e}")
+        return []
+
+
+def find_pdf_file_v2(book_name: str, base_folder: str) -> Optional[str]:
+    """在基础文件夹中搜索PDF文件（使用Python原生函数）"""
+    if not os.path.exists(base_folder):
+        logger.warning(f"搜索基础文件夹不存在: {base_folder}")
+        return None
+    
+    try:
+        # 遍历目录树查找匹配的PDF文件
+        for root, dirs, files in os.walk(base_folder):
+            for filename in files:
+                if filename.lower().endswith('.pdf'):
+                    name_without_ext = os.path.splitext(filename)[0]
+                    
+                    # 精确匹配
+                    if name_without_ext == book_name:
+                        pdf_path = os.path.join(root, filename)
+                        logger.info(f"找到PDF文件（精确匹配）: {book_name} -> {pdf_path}")
+                        return pdf_path
+                    
+                    # 前缀匹配
+                    if filename.startswith(book_name):
+                        pdf_path = os.path.join(root, filename)
+                        logger.info(f"找到PDF文件（前缀匹配）: {book_name} -> {pdf_path}")
+                        return pdf_path
+                    
+                    # 包含匹配
+                    if book_name in filename:
+                        pdf_path = os.path.join(root, filename)
+                        logger.info(f"找到PDF文件（包含匹配）: {book_name} -> {pdf_path}")
+                        return pdf_path
+                        
+    except Exception as e:
+        logger.error(f"搜索PDF文件出错: {e}")
+    
+    logger.warning(f"未找到PDF文件: {book_name}")
+    return None
+
+
+def build_pdf_cache(base_folder: str, target_books: list = None) -> dict:
+    """构建PDF文件缓存，一次性搜索所有PDF文件"""
+    pdf_cache = {}
+    
+    if not os.path.exists(base_folder):
+        logger.warning(f"搜索基础文件夹不存在: {base_folder}")
+        return pdf_cache
+    
+    try:
+        # 如果提供了目标书籍列表，先尝试精确搜索
+        if target_books:
+            logger.info(f"开始为 {len(target_books)} 本目标书籍构建PDF缓存，搜索目录: {base_folder}")
+            
+            with tqdm(target_books, desc="🔍 搜索目标书籍PDF", unit="本") as pbar:
+                for book_name in pbar:
+                    pbar.set_description(f"🔍 搜索: {book_name[:20]}...")
+                    
+                    patterns = [
+                        f"{book_name}.pdf",
+                        f"{book_name}_*.pdf", 
+                        f"*{book_name}*.pdf"
+                    ]
+                    
+                    found_for_book = False
+                    for root, dirs, files in os.walk(base_folder):
+                        if found_for_book:
+                            break
+                            
+                        for pattern in patterns:
+                            for filename in files:
+                                if filename.lower().endswith('.pdf') and fnmatch.fnmatch(filename, pattern):
+                                    pdf_path = os.path.join(root, filename)
+                                    name_without_ext = os.path.splitext(filename)[0]
+                                    
+                                    # 存储多种匹配方式
+                                    pdf_cache[filename] = pdf_path
+                                    pdf_cache[name_without_ext] = pdf_path
+                                    pdf_cache[book_name] = pdf_path
+                                    
+                                    if '_' in name_without_ext:
+                                        main_part = name_without_ext.split('_')[0]
+                                        if main_part not in pdf_cache:
+                                            pdf_cache[main_part] = pdf_path
+                                    
+                                    pbar.set_description(f"✅ 找到: {book_name[:20]}...")
+                                    found_for_book = True
+                                    break
+                            if found_for_book:
+                                break
+            
+            found_books = len([book for book in target_books if book in pdf_cache])
+            logger.info(f"精确搜索完成，找到 {found_books}/{len(target_books)} 本目标书籍的PDF文件")
+            
+            if found_books / len(target_books) >= 0.8:
+                logger.info(f"精确搜索成功率较高，跳过全量搜索")
+                return pdf_cache
+        
+        # 执行全量搜索
+        logger.info(f"开始全量PDF文件缓存构建，搜索目录: {base_folder}")
+        
+        pdf_count = 0
+        total_dirs = sum(1 for _, _, _ in os.walk(base_folder))
+        
+        with tqdm(total=total_dirs, desc="📁 扫描目录", unit="dir") as pbar:
+            for root, dirs, files in os.walk(base_folder):
+                current_dir = os.path.basename(root) or os.path.basename(os.path.dirname(root))
+                pbar.set_description(f"📁 扫描: {current_dir[:30]}...")
+                
+                for filename in files:
+                    if filename.lower().endswith('.pdf'):
+                        pdf_path = os.path.join(root, filename)
+                        name_without_ext = os.path.splitext(filename)[0]
+                        
+                        pdf_cache[filename] = pdf_path
+                        pdf_cache[name_without_ext] = pdf_path
+                        
+                        if '_' in name_without_ext:
+                            main_part = name_without_ext.split('_')[0]
+                            if main_part not in pdf_cache:
+                                pdf_cache[main_part] = pdf_path
+                        
+                        pdf_count += 1
+                        pbar.set_description(f"📁 扫描: {current_dir[:20]}... (找到 {pdf_count} PDF)")
+                
+                pbar.update(1)
+        
+        logger.info(f"PDF文件缓存构建完成，找到 {pdf_count} 个PDF文件")
+            
+    except Exception as e:
+        logger.error(f"构建PDF缓存出错: {e}")
+    
+    return pdf_cache
+
+
+def check_book_already_processed(book_name: str, output_base_dir: str) -> bool:
+    """检查书籍是否已经处理过"""
+    try:
+        book_output_dir = os.path.join(output_base_dir, book_name)
+        
+        if not os.path.exists(book_output_dir):
+            return False
+        
+        result_json_path = os.path.join(book_output_dir, "extraction_results.json")
+        if not os.path.exists(result_json_path):
+            return False
+        
+        images_dir = os.path.join(book_output_dir, "images")
+        if not os.path.exists(images_dir):
+            return False
+        
+        image_files = [f for f in os.listdir(images_dir) if f.endswith('.png')]
+        if not image_files:
+            return False
+        
+        logger.debug(f"书籍 {book_name} 已经处理过，有 {len(image_files)} 张图片")
+        return True
+        
+    except Exception as e:
+        logger.warning(f"检查书籍 {book_name} 处理状态时出错: {e}")
+        return False
+
+
+def get_processed_books_from_filesystem(output_base_dir: str) -> set:
+    """从文件系统获取已处理的书籍列表"""
+    processed_books = set()
+    
+    try:
+        if not os.path.exists(output_base_dir):
+            return processed_books
+        
+        for item in os.listdir(output_base_dir):
+            item_path = os.path.join(output_base_dir, item)
+            if os.path.isdir(item_path):
+                if check_book_already_processed(item, output_base_dir):
+                    processed_books.add(item)
+        
+        logger.info(f"从文件系统发现 {len(processed_books)} 本已处理的书籍")
+        
+    except Exception as e:
+        logger.error(f"从文件系统获取已处理书籍列表失败: {e}")
+    
+    return processed_books
+
+
+def process_pdf_extraction(json_path: str, pdf_path: Optional[str] = None, output_dir: Optional[str] = None) -> ProcessResult:
+    """处理PDF图像截取"""
+    try:
+        # 解析JSON文件
+        json_data = parse_json_file(json_path)
+        
+        # 确定PDF路径
+        if not pdf_path:
+            if 'pdf_path' in json_data:
+                pdf_path = json_data['pdf_path']
+            else:
+                json_file = Path(json_path)
+                pdf_path = str(json_file.parent / f"{json_file.stem}.pdf")
+        
+        if not os.path.exists(pdf_path):
+            raise Exception(f"PDF文件不存在: {pdf_path}")
+        
+        # 确定书籍名称
+        pdf_basename = os.path.basename(pdf_path)
+        book_name = os.path.splitext(pdf_basename)[0]
+        
+        # 确定输出目录
+        if not output_dir or output_dir.strip() == "":
+            base_output_dir = str(Path(pdf_path).parent)
+        else:
+            if not os.path.isabs(output_dir):
+                base_output_dir = str(Path.cwd() / output_dir)
+            else:
+                base_output_dir = output_dir
+        
+        # 创建书籍专用目录
+        book_output_dir = os.path.join(base_output_dir, book_name)
+        os.makedirs(book_output_dir, exist_ok=True)
+        
+        # 复制文件到书籍目录
+        pdf_copy_path = os.path.join(book_output_dir, pdf_basename)
+        if not os.path.exists(pdf_copy_path):
+            shutil.copy2(pdf_path, pdf_copy_path)
+        
+        json_basename = os.path.basename(json_path)
+        json_copy_path = os.path.join(book_output_dir, json_basename)
+        if not os.path.exists(json_copy_path):
+            shutil.copy2(json_path, json_copy_path)
+        
+        # 提取目标信息
+        targets = extract_targets_from_json(json_data)
+        
+        if not targets:
+            return ProcessResult(
+                success=False,
+                message="未找到可处理的目标",
+                saved_images=[],
+                total_targets=0,
+                processed_targets=0
+            )
+        
+        # 创建PDF图像截取器
+        extractor = PDFImageExtractor(pdf_path)
+        
+        saved_images = []
+        processed_count = 0
+        images_dir = os.path.join(book_output_dir, "images")
+        os.makedirs(images_dir, exist_ok=True)
+        
+        try:
+            # 处理每个目标（不显示进度条，避免在多进程中混乱）
+            for target in targets:
+                output_path = os.path.join(images_dir, f"{target.id}.png")
+                if extractor.extract_image_by_bbox(target.page_idx, target.bbox, output_path):
+                    saved_images.append(output_path)
+                    processed_count += 1
+                    logger.debug(f"成功截取: {target.type}#{target.page_idx}")
+                else:
+                    logger.warning(f"截取失败: {target.type}#{target.page_idx}")
+            
+        finally:
+            extractor.close()
+        
+        # 保存结果JSON
+        result_json_path = os.path.join(book_output_dir, "extraction_results.json")
+        try:
+            result_data = {
+                "pdf_path": pdf_path,
+                "json_source": json_path,
+                "extraction_time": str(time.time()),
+                "total_targets": len(targets),
+                "processed_targets": processed_count,
+                "targets": []
+            }
+            
+            for target in targets:
+                target_info = {
+                    "id": target.id,
+                    "type": target.type,
+                    "text": target.text,
+                    "bbox": target.bbox,
+                    "page_idx": target.page_idx,
+                    "image_path": os.path.join(images_dir, f"{target.id}.png") if target.id in [Path(img).stem for img in saved_images] else None
+                }
+                result_data["targets"].append(target_info)
+            
+            with open(result_json_path, 'w', encoding='utf-8') as f:
+                json.dump(result_data, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"结果已保存到: {result_json_path}")
+            
+        except Exception as e:
+            logger.warning(f"保存结果JSON失败: {e}")
+        
+        return ProcessResult(
+            success=True,
+            message=f"成功处理 {processed_count}/{len(targets)} 个目标，输出目录: {book_output_dir}",
+            saved_images=saved_images,
+            total_targets=len(targets),
+            processed_targets=processed_count
+        )
+        
+    except Exception as e:
+        logger.error(f"处理PDF图像截取失败: {e}")
+        return ProcessResult(
+            success=False,
+            message=f"处理失败: {str(e)}",
+            saved_images=[],
+            total_targets=0,
+            processed_targets=0
+        )
+
+
+def process_single_book_worker(book_task: BookTask) -> Dict:
+    """单个书籍处理工作函数（多进程）"""
+    start_time = time.time()
+    try:
+        logger.info(f"🔄 开始处理书籍: {book_task.book_name}")
+        
+        # 按需查找PDF文件
+        pdf_path = book_task.pdf_path
+        if pdf_path is None and book_task.pdf_base_folder:
+            logger.info(f"🔍 为书籍 {book_task.book_name} 搜索PDF文件...")
+            pdf_path = find_pdf_file_v2(book_task.book_name, book_task.pdf_base_folder)
+            
+            if pdf_path is None:
+                logger.warning(f"❌ 未找到PDF文件: {book_task.book_name}")
+                return {
+                    "book_name": book_task.book_name,
+                    "success": False,
+                    "message": "未找到对应的PDF文件",
+                    "json_files_found": 1,
+                    "targets_processed": 0,
+                    "images_saved": 0
+                }
+            
+            logger.info(f"✅ 找到PDF文件: {os.path.basename(pdf_path)}")
+        
+        # 执行PDF图像提取
+        logger.info(f"🎯 开始截取图像: {book_task.book_name}")
+        result = process_pdf_extraction(
+            book_task.json_file_path,
+            pdf_path,
+            book_task.output_dir
+        )
+        
+        # 计算处理时间
+        elapsed_time = time.time() - start_time
+        
+        if result.success:
+            logger.info(f"✅ 书籍处理成功: {book_task.book_name} - {result.processed_targets}目标/{len(result.saved_images)}图片 ({elapsed_time:.1f}秒)")
+        else:
+            logger.warning(f"❌ 书籍处理失败: {book_task.book_name} - {result.message}")
+        
+        return {
+            "book_name": book_task.book_name,
+            "success": result.success,
+            "message": result.message,
+            "json_files_found": 1,
+            "targets_processed": result.processed_targets,
+            "images_saved": len(result.saved_images),
+            "processing_time": elapsed_time
+        }
+        
+    except Exception as e:
+        elapsed_time = time.time() - start_time
+        logger.error(f"💥 处理书籍异常: {book_task.book_name} - {str(e)} ({elapsed_time:.1f}秒)")
+        return {
+            "book_name": book_task.book_name,
+            "success": False,
+            "message": f"处理异常: {str(e)}",
+            "json_files_found": 0,
+            "targets_processed": 0,
+            "images_saved": 0,
+            "processing_time": elapsed_time
+        }
+
+
+def batch_process_books(
+    results_folder: str, 
+    pdf_base_folder: str, 
+    output_base_dir: Optional[str] = None
+) -> BatchResult:
+    """批量处理PDF图像截取（简化版）"""
+    try:
+        # 验证文件夹
+        if not os.path.exists(results_folder):
+            raise Exception(f"结果文件夹不存在: {results_folder}")
+        if not os.path.exists(pdf_base_folder):
+            raise Exception(f"PDF基础文件夹不存在: {pdf_base_folder}")
+        
+        # 确定输出目录，增加总文件夹层级
+        if not output_base_dir:
+            output_base_dir = os.path.join(results_folder, "batch_output")
+        
+        # 创建总文件夹：使用results_folder的父目录文件名
+        results_folder_path = Path(results_folder)
+        total_folder_name = results_folder_path.parent.name
+        if not total_folder_name or total_folder_name == ".":
+            # 如果父目录是根目录，使用results_folder本身的名字
+            total_folder_name = results_folder_path.name
+        
+        # 最终输出目录结构：output_base_dir/总文件夹/
+        final_output_dir = os.path.join(output_base_dir, total_folder_name)
+        os.makedirs(final_output_dir, exist_ok=True)
+        
+        logger.info(f"输出目录结构: {output_base_dir}/{total_folder_name}/各书籍文件夹")
+        logger.info(f"总文件夹名: {total_folder_name} (来自: {results_folder_path.parent})")
+        
+        # 更新output_base_dir为包含总文件夹的路径
+        output_base_dir = final_output_dir
+        
+        # 获取所有书籍文件夹
+        book_folders = []
+        for item in os.listdir(results_folder):
+            item_path = os.path.join(results_folder, item)
+            if os.path.isdir(item_path):
+                book_folders.append(item)
+        
+        if not book_folders:
+            raise Exception(f"在文件夹 {results_folder} 中未找到任何书籍文件夹")
+        
+        logger.info(f"找到 {len(book_folders)} 个书籍文件夹")
+        
+        # 智能恢复：检查已处理的书籍
+        processed_books = get_processed_books_from_filesystem(output_base_dir)
+        pending_books = [book_name for book_name in book_folders if book_name not in processed_books]
+        
+        logger.info(f"总计 {len(book_folders)} 本书籍，已处理 {len(processed_books)} 本，待处理 {len(pending_books)} 本")
+        
+        if processed_books:
+            logger.info(f"跳过 {len(processed_books)} 本已处理的书籍")
+        
+        # 验证JSON文件
+        valid_books = []
+        with tqdm(pending_books, desc="📋 验证JSON文件", unit="本") as pbar:
+            for book_name in pbar:
+                pbar.set_description(f"📋 验证: {book_name[:20]}...")
+                
+                book_folder_path = os.path.join(results_folder, book_name)
+                json_file_pattern = f"{book_name}_middle.json"
+                json_file_path = os.path.join(book_folder_path, json_file_pattern)
+                
+                if os.path.exists(json_file_path):
+                    valid_books.append((book_name, json_file_path))
+                    pbar.set_description(f"✅ 有效: {book_name[:20]}...")
+                else:
+                    pbar.set_description(f"❌ 跳过: {book_name[:20]}...")
+        
+        logger.info(f"JSON验证完成，{len(valid_books)} 本书籍准备处理")
+        
+        # 创建任务
+        book_tasks = []
+        for book_name, json_file_path in valid_books:
+            book_task = BookTask(
+                book_name=book_name,
+                json_file_path=json_file_path,
+                pdf_path=None,
+                output_dir=output_base_dir,
+                task_id="batch_task",
+                pdf_base_folder=pdf_base_folder
+            )
+            book_tasks.append(book_task)
+        
+        # 为已处理的书籍创建结果记录
+        all_results = []
+        for book_name in processed_books:
+            all_results.append({
+                "book_name": book_name,
+                "success": True,
+                "message": "智能恢复：跳过已处理文件",
+                "json_files_found": 1,
+                "targets_processed": 0,
+                "images_saved": len([f for f in os.listdir(os.path.join(output_base_dir, book_name, "images")) 
+                                   if f.endswith('.png')]) if os.path.exists(os.path.join(output_base_dir, book_name, "images")) else 0
+            })
+        
+        if not book_tasks:
+            if processed_books:
+                return BatchResult(
+                    success=True,
+                    message=f"所有 {len(processed_books)} 本书籍已处理完成",
+                    total_books=len(book_folders),
+                    processed_books=len(processed_books),
+                    failed_books=[],
+                    results=all_results
+                )
+            else:
+                raise Exception("没有找到可处理的书籍")
+        
+        logger.info(f"准备处理 {len(book_tasks)} 本书籍，使用 {MAX_WORKERS} 个进程")
+        
+        # 多进程处理
+        failed_books = []
+        
+        with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # 提交所有任务
+            future_to_book = {
+                executor.submit(process_single_book_worker, book_task): book_task
+                for book_task in book_tasks
+            }
+            
+            # 计算总的处理进度（包括已处理的书籍）
+            total_books_to_process = len(book_folders)
+            already_processed_count = len(processed_books)
+            
+            # 使用进度条显示整体处理进度
+            with tqdm(
+                total=total_books_to_process, 
+                initial=already_processed_count,  # 从已处理的书籍数开始
+                desc="📚 批量处理进度", 
+                unit="本", 
+                dynamic_ncols=True,
+                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+            ) as pbar:
+                
+                # 设置初始状态
+                pbar.set_postfix({
+                    '已跳过': already_processed_count,
+                    '待处理': len(book_tasks),
+                    '成功': 0,
+                    '失败': 0
+                })
+                
+                completed_count = 0  # 新完成的任务数
+                
+                for future in as_completed(future_to_book):
+                    book_task = future_to_book[future]
+                    try:
+                        result = future.result()
+                        all_results.append(result)
+                        completed_count += 1
+                        
+                        if result["success"]:
+                            status_msg = f"✅ 成功: {result['book_name'][:20]}"
+                            current_successful = len([r for r in all_results if r.get("success", False) and r.get("message") != "智能恢复：跳过已处理文件"])
+                        else:
+                            failed_books.append(result["book_name"])
+                            status_msg = f"❌ 失败: {result['book_name'][:20]}"
+                            current_successful = len([r for r in all_results if r.get("success", False) and r.get("message") != "智能恢复：跳过已处理文件"])
+                        
+                        # 更新进度条描述和后缀
+                        pbar.set_description(f"📚 {status_msg}")
+                        pbar.set_postfix({
+                            '已跳过': already_processed_count,
+                            '成功': current_successful,
+                            '失败': len(failed_books),
+                            '进度': f"{completed_count}/{len(book_tasks)}"
+                        })
+                        
+                        # 更新进度
+                        pbar.update(1)
+                        
+                        # 显示详细信息
+                        targets = result.get("targets_processed", 0)
+                        images = result.get("images_saved", 0)
+                        logger.info(f"完成处理 ({completed_count}/{len(book_tasks)}): {result['book_name']} - {targets}目标/{images}图片")
+                        
+                    except Exception as e:
+                        logger.error(f"处理任务失败: {e}")
+                        failed_books.append(book_task.book_name)
+                        completed_count += 1
+                        
+                        error_result = {
+                            "book_name": book_task.book_name,
+                            "success": False,
+                            "message": f"任务执行异常: {str(e)}",
+                            "json_files_found": 0,
+                            "targets_processed": 0,
+                            "images_saved": 0
+                        }
+                        all_results.append(error_result)
+                        
+                        # 更新进度条
+                        pbar.set_description(f"📚 💥 异常: {book_task.book_name[:20]}")
+                        pbar.set_postfix({
+                            '已跳过': already_processed_count,
+                            '成功': len([r for r in all_results if r.get("success", False) and r.get("message") != "智能恢复：跳过已处理文件"]),
+                            '失败': len(failed_books),
+                            '进度': f"{completed_count}/{len(book_tasks)}"
+                        })
+                        pbar.update(1)
+                
+                # 完成后的最终状态
+                final_successful = len([r for r in all_results if r.get("success", False)])
+                pbar.set_description(f"📚 🎉 批量处理完成")
+                pbar.set_postfix({
+                    '总成功': final_successful,
+                    '总失败': len(failed_books),
+                    '完成度': '100%'
+                })
+        
+        # 统计结果
+        successful_books = len([r for r in all_results if r.get("success", False)])
+        
+        summary_message = f"批量处理完成: {successful_books}/{len(book_folders)} 本书籍处理成功"
+        if failed_books:
+            summary_message += f"，失败的书籍: {', '.join(failed_books)}"
+        
+        return BatchResult(
+            success=successful_books > 0,
+            message=summary_message,
+            total_books=len(book_folders),
+            processed_books=successful_books,
+            failed_books=failed_books,
+            results=all_results
+        )
+        
+    except Exception as e:
+        logger.error(f"批量处理失败: {e}")
+        return BatchResult(
+            success=False,
+            message=f"批量处理失败: {str(e)}",
+            total_books=0,
+            processed_books=0,
+            failed_books=[],
+            results=[]
+        )
+
+
+if __name__ == "__main__":
+    # 简单的命令行接口
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="PDF图像截取器 - 核心功能")
+    parser.add_argument("--results-folder", required=True, help="结果文件夹路径")
+    parser.add_argument("--pdf-base-folder", required=True, help="PDF搜索基础目录")
+    parser.add_argument("--output-base-dir", help="输出基础目录")
+    
+    args = parser.parse_args()
+    
+    print("🚀 PDF图像截取器 - 批量处理开始")
+    print("="*80)
+    print(f"📂 结果文件夹: {args.results_folder}")
+    print(f"📁 PDF基础目录: {args.pdf_base_folder}")
+    print(f"📤 输出目录: {args.output_base_dir or '自动创建'}")
+    print("="*80)
+    
+    try:
+        result = batch_process_books(
+            results_folder=args.results_folder,
+            pdf_base_folder=args.pdf_base_folder,
+            output_base_dir=args.output_base_dir
+        )
+        
+        # 显示结果
+        print("\n" + "="*80)
+        print("🎉 批量处理完成!")
+        print("="*80)
+        
+        success_rate = (result.processed_books / result.total_books * 100) if result.total_books > 0 else 0
+        
+        print(f"📊 处理状态: {'✅ 成功' if result.success else '❌ 失败'}")
+        print(f"📚 总书籍数: {result.total_books}")
+        print(f"✅ 成功处理: {result.processed_books} ({success_rate:.1f}%)")
+        print(f"❌ 失败数量: {len(result.failed_books)}")
+        
+        if result.failed_books:
+            print(f"💔 失败书籍: {', '.join(result.failed_books[:3])}")
+            if len(result.failed_books) > 3:
+                print(f"   ... 以及其他 {len(result.failed_books) - 3} 本")
+        
+        print(f"💬 消息: {result.message}")
+        print("="*80)
+        
+        # 显示详细结果
+        if result.results:
+            print("\n📋 最近处理结果:")
+            recent_results = result.results[-5:] if len(result.results) > 5 else result.results
+            for book_result in recent_results:
+                status = "✅" if book_result.get("success", False) else "❌"
+                book_name = book_result.get("book_name", "未知")[:30]
+                targets = book_result.get("targets_processed", 0)
+                images = book_result.get("images_saved", 0)
+                
+                if book_result.get("success", False):
+                    print(f"  {status} {book_name}: {targets}目标/{images}图片")
+                else:
+                    message = book_result.get("message", "无消息")[:50]
+                    print(f"  {status} {book_name}: {message}")
+            
+            if len(result.results) > 5:
+                print(f"  📝 ... 以及其他 {len(result.results) - 5} 个结果")
+        
+        print("\n🚀 批量处理成功完成！")
+        
+    except Exception as e:
+        print(f"❌ 批量处理异常: {e}")
+        import traceback
+        traceback.print_exc()
