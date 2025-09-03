@@ -1,0 +1,183 @@
+/* 额外的样式文件，如果需要的话 */
+.book-result-simple {
+    padding: 8px 12px;
+    margin: 5px 0;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    border-left: 3px solid #28a745;
+    font-size: 14px;
+}
+
+.book-result-simple:contains('❌') {
+    border-left-color: #dc3545;
+    background-color: #fff5f5;
+}
+
+.progress-stats {
+    margin-top: 10px;
+    font-size: 14px;
+    text-align: center;
+}
+
+.progress-stats #processedCount {
+    font-weight: bold;
+    color: #28a745;
+}
+
+.form-options {
+    margin: 15px 0;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+}
+
+.form-options label {
+    display: block;
+    margin: 8px 0;
+    cursor: pointer;
+}
+
+.form-options input[type="checkbox"] {
+    margin-right: 8px;
+}
+
+.progress-bar {
+    position: relative;
+}
+
+.progress-percentage {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-weight: bold;
+    color: white;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+}
+
+.progress-details {
+    margin-top: 10px;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.progress-details div {
+    margin: 5px 0;
+}
+
+.current-book {
+    font-weight: bold;
+    color: #007bff;
+}
+
+.task-info {
+    color: #6c757d;
+    font-family: monospace;
+}
+
+.estimated-time {
+    color: #28a745;
+    font-weight: bold;
+}
+
+.task-controls {
+    margin-top: 15px;
+    text-align: center;
+}
+
+.task-controls .btn {
+    margin: 0 10px;
+}
+
+.btn-warning {
+    background-color: #ffc107;
+    border-color: #ffc107;
+    color: #212529;
+}
+
+.btn-warning:hover {
+    background-color: #e0a800;
+    border-color: #d39e00;
+}
+
+.btn-info {
+    background-color: #17a2b8;
+    border-color: #17a2b8;
+    color: white;
+}
+
+.btn-info:hover {
+    background-color: #138496;
+    border-color: #117a8b;
+}
+
+.btn-danger {
+    background-color: #dc3545;
+    border-color: #dc3545;
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #c82333;
+    border-color: #bd2130;
+}
+
+.task-controls .btn {
+    margin: 5px;
+    padding: 8px 12px;
+    font-size: 14px;
+    border-radius: 4px;
+    border: 1px solid;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.task-controls .btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.result.warning {
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    color: #856404;
+}
+
+.result.info {
+    background-color: #d1ecf1;
+    border: 1px solid #bee5eb;
+    color: #0c5460;
+}
+
+.info-box {
+    background-color: #d1ecf1;
+    border: 1px solid #bee5eb;
+    border-radius: 5px;
+    padding: 15px;
+    margin: 15px 0;
+    color: #0c5460;
+}
+
+.info-box h4 {
+    margin: 0 0 10px 0;
+    color: #0c5460;
+    font-size: 16px;
+}
+
+.info-box p {
+    margin: 8px 0;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.info-box ul {
+    margin: 10px 0;
+    padding-left: 20px;
+}
+
+.info-box li {
+    margin: 5px 0;
+    font-size: 14px;
+}
