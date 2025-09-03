@@ -66,7 +66,8 @@ class BatchAnalyze:
                 mfr_count += len(images_formula_list[image_index])
 
         # 清理显存
-        # clean_vram(self.model.device, vram_threshold=8)
+        from mineru.utils.model_utils import clean_vram
+        clean_vram(self.model.device, vram_threshold=8)
 
         ocr_res_list_all_page = []
         table_res_list_all_page = []
@@ -212,6 +213,9 @@ class BatchAnalyze:
                                 )
 
                                 ocr_res_list_dict['layout_res'].extend(ocr_result_list)
+                    
+                    # 在每个分辨率组处理完后清理显存
+                    clean_vram(self.model.device, vram_threshold=8)
         else:
             # 原始单张处理模式
             for ocr_res_list_dict in tqdm(ocr_res_list_all_page, desc="OCR-det Predict"):
@@ -268,8 +272,11 @@ class BatchAnalyze:
                         )
                 else:
                     logger.warning(
-                        'table recognition processing fails, not get html return'
-                    )
+                            'table recognition processing fails, not get html return'
+                        )
+            
+            # 表格识别完成后清理显存
+            clean_vram(self.model.device, vram_threshold=8)
 
         # Create dictionaries to store items by language
         need_ocr_lists_by_lang = {}  # Dict of lists for each language

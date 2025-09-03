@@ -46,7 +46,7 @@ def get_predictor(
     presence_penalty: float = DEFAULT_PRESENCE_PENALTY,
     no_repeat_ngram_size: int = DEFAULT_NO_REPEAT_NGRAM_SIZE,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
-    http_timeout: int = 600,
+    http_timeout: int = 2400,
     **kwargs,
 ) -> BasePredictor:
     start_time = time.time()
