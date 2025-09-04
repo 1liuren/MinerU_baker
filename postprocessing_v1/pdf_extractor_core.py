@@ -278,9 +278,7 @@ def build_pdf_cache(base_folder: str, target_books: list = None) -> dict:
                     pbar.set_description(f"🔍 搜索: {book_name[:20]}...")
                     
                     patterns = [
-                        f"{book_name}.pdf",
-                        f"{book_name}_*.pdf", 
-                        f"*{book_name}*.pdf"
+                        f"{book_name}.pdf"
                     ]
                     
                     found_for_book = False
@@ -305,29 +303,10 @@ def build_pdf_cache(base_folder: str, target_books: list = None) -> dict:
             
             found_books = len([book for book in target_books if book in pdf_cache])
             logger.info(f"精确搜索完成，找到 {found_books}/{len(target_books)} 本目标书籍的PDF文件")
-            
-            if found_books / len(target_books) >= 0.8:
-                logger.info(f"精确搜索成功率较高，跳过全量搜索")
-                return pdf_cache
-        
-        # 执行全量搜索
-        logger.info(f"开始全量PDF文件缓存构建，搜索目录: {base_folder}")
-        pdf_count = 0
-        for root, dirs, files in os.walk(base_folder):
-            for filename in files:
-                if filename.lower().endswith('.pdf'):
-                    pdf_path = os.path.join(root, filename)
-                    name_without_ext = os.path.splitext(filename)[0]
-                    pdf_cache[_stem_key(name_without_ext)] = pdf_path
-                    pdf_count += 1
-        logger.info(f"PDF文件缓存构建完成，找到 {pdf_count} 个PDF文件")
-        
-        logger.info(f"PDF文件缓存构建完成，找到 {pdf_count} 个PDF文件")
-            
     except Exception as e:
         logger.error(f"构建PDF缓存出错: {e}")
-    
-    return pdf_cache
+        return pdf_cache
+
 
 
 def check_book_already_processed(book_name: str, output_base_dir: str) -> bool:
