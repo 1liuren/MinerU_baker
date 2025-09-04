@@ -233,8 +233,9 @@ def parse_doc(
 if __name__ == '__main__':
     # args
     __dir__ = os.path.dirname(os.path.abspath(__file__))
-    pdf_files_dir = os.path.join(__dir__, "pdfs")
-    output_dir = os.path.join(__dir__, "output")
+    # pdf_files_dir = os.path.join(__dir__, "pdfs")
+    pdf_files_dir = os.path.join(__dir__, "../data/0818_table")
+    output_dir = os.path.join(__dir__, "0818_output")
     pdf_suffixes = [".pdf"]
     image_suffixes = [".png", ".jpeg", ".jpg"]
 

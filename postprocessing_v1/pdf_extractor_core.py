@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Union
 from dataclasses import dataclass
 import logging
+from loguru import logger
 import shutil
 import time
 import fnmatch
@@ -24,6 +25,7 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 import threading
+import unicodedata
 
 # 进度条支持
 try:
@@ -39,7 +41,7 @@ except ImportError:
             self.desc = desc or ""
             self.current = 0
             if desc:
-                print(f"{desc}: 开始处理...")
+                logger.info(f"{desc}: 开始处理...")
         
         def __iter__(self):
             if self.iterable:
@@ -53,13 +55,13 @@ except ImportError:
         
         def __exit__(self, *args):
             if self.desc:
-                print(f"\n{self.desc}: 完成!")
+                logger.info(f"\n{self.desc}: 完成!")
         
         def update(self, n=1):
             self.current += n
             if self.total > 0:
                 percent = (self.current / self.total) * 100
-                print(f"\r{self.desc}: {self.current}/{self.total} ({percent:.1f}%)", end="", flush=True)
+                logger.info(f"\r{self.desc}: {self.current}/{self.total} ({percent:.1f}%)", end="", flush=True)
         
         def set_description(self, desc):
             self.desc = desc
@@ -67,12 +69,12 @@ except ImportError:
         def set_postfix(self, postfix_dict):
             pass
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# # 配置日志
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# )
+# logger = logging.getLogger(__name__)
 
 # 全局配置
 MAX_WORKERS = min(multiprocessing.cpu_count(), 32)
@@ -81,6 +83,9 @@ PROGRESS_CHECK_INTERVAL = 1
 # 任务状态存储
 task_status_store = {}
 task_lock = threading.Lock()
+
+# 全局PDF缓存（规范化键 -> 绝对路径）
+PDF_CACHE: dict[str, str] = {}
 
 @dataclass
 class TaskProgress:
@@ -154,7 +159,7 @@ class PDFImageExtractor:
         """打开PDF文件"""
         try:
             self.doc = fitz.open(self.pdf_path)
-            logger.info(f"成功打开PDF文件: {self.pdf_path}")
+            logger.debug(f"成功打开PDF文件: {self.pdf_path}")
         except Exception as e:
             raise Exception(f"无法打开PDF文件 {self.pdf_path}: {e}")
     
@@ -215,6 +220,12 @@ def parse_json_file(json_path: str) -> Dict:
         return data
     except Exception as e:
         raise Exception(f"无法解析JSON文件 {json_path}: {e}")
+def _normalize_key(s: str) -> str:
+    """用于缓存键和比较的规范化：去空白、Unicode NFC、大小写折叠。"""
+    if s is None:
+        return ""
+    return unicodedata.normalize("NFC", str(s).strip()).casefold()
+
 
 
 def extract_targets_from_json(json_data: Dict) -> List[TargetInfo]:
@@ -269,46 +280,59 @@ def extract_targets_from_json(json_data: Dict) -> List[TargetInfo]:
 
 
 def find_pdf_file_v2(book_name: str, base_folder: str) -> Optional[str]:
-    """在基础文件夹中搜索PDF文件（使用Python原生函数）"""
+    """查找PDF文件：优先使用一次性构建的缓存；必要时回退到遍历。"""
     if not os.path.exists(base_folder):
         logger.warning(f"搜索基础文件夹不存在: {base_folder}")
         return None
-    
+
+    key = _normalize_key(book_name)
+
+    # 1) 优先查全局缓存
+    if PDF_CACHE:
+        path = PDF_CACHE.get(key)
+        if path and os.path.exists(path):
+            return path
+        # 次优：前缀/包含匹配
+        for k, p in PDF_CACHE.items():
+            try:
+                if k.startswith(key) or (key and key in k):
+                    if os.path.exists(p):
+                        return p
+            except Exception:
+                continue
+
+    # 2) 回退：遍历（规范化比较）
     try:
-        # 遍历目录树查找匹配的PDF文件
         for root, dirs, files in os.walk(base_folder):
             for filename in files:
-                if filename.lower().endswith('.pdf'):
-                    name_without_ext = os.path.splitext(filename)[0]
-                    
-                    # 精确匹配
-                    if name_without_ext == book_name:
-                        pdf_path = os.path.join(root, filename)
-                        logger.info(f"找到PDF文件（精确匹配）: {book_name} -> {pdf_path}")
-                        return pdf_path
-                    
-                    # 前缀匹配
-                    if filename.startswith(book_name):
-                        pdf_path = os.path.join(root, filename)
-                        logger.info(f"找到PDF文件（前缀匹配）: {book_name} -> {pdf_path}")
-                        return pdf_path
-                    
-                    # 包含匹配
-                    if book_name in filename:
-                        pdf_path = os.path.join(root, filename)
-                        logger.info(f"找到PDF文件（包含匹配）: {book_name} -> {pdf_path}")
-                        return pdf_path
-                        
+                if not filename.lower().endswith('.pdf'):
+                    continue
+                name_without_ext = os.path.splitext(filename)[0]
+                name_key = _normalize_key(name_without_ext)
+                file_key = _normalize_key(filename)
+
+                if name_key == key:
+                    pdf_path = os.path.join(root, filename)
+                    logger.info(f"找到PDF文件（精确匹配）: {book_name} -> {pdf_path}")
+                    return pdf_path
+                if file_key.startswith(key):
+                    pdf_path = os.path.join(root, filename)
+                    logger.info(f"找到PDF文件（前缀匹配）: {book_name} -> {pdf_path}")
+                    return pdf_path
+                if key and key in file_key:
+                    pdf_path = os.path.join(root, filename)
+                    logger.info(f"找到PDF文件（包含匹配）: {book_name} -> {pdf_path}")
+                    return pdf_path
     except Exception as e:
         logger.error(f"搜索PDF文件出错: {e}")
-    
+
     logger.warning(f"未找到PDF文件: {book_name}")
     return None
 
 
 def build_pdf_cache(base_folder: str, target_books: list = None) -> dict:
     """构建PDF文件缓存，一次性搜索所有PDF文件"""
-    pdf_cache = {}
+    pdf_cache: dict[str, str] = {}
     
     if not os.path.exists(base_folder):
         logger.warning(f"搜索基础文件夹不存在: {base_folder}")
@@ -340,15 +364,16 @@ def build_pdf_cache(base_folder: str, target_books: list = None) -> dict:
                                     pdf_path = os.path.join(root, filename)
                                     name_without_ext = os.path.splitext(filename)[0]
                                     
-                                    # 存储多种匹配方式
-                                    pdf_cache[filename] = pdf_path
-                                    pdf_cache[name_without_ext] = pdf_path
-                                    pdf_cache[book_name] = pdf_path
+                                    # 存储多种匹配方式（规范化键）
+                                    pdf_cache[_normalize_key(filename)] = pdf_path
+                                    pdf_cache[_normalize_key(name_without_ext)] = pdf_path
+                                    pdf_cache[_normalize_key(book_name)] = pdf_path
                                     
                                     if '_' in name_without_ext:
                                         main_part = name_without_ext.split('_')[0]
-                                        if main_part not in pdf_cache:
-                                            pdf_cache[main_part] = pdf_path
+                                        norm_main = _normalize_key(main_part)
+                                        if norm_main not in pdf_cache:
+                                            pdf_cache[norm_main] = pdf_path
                                     
                                     pbar.set_description(f"✅ 找到: {book_name[:20]}...")
                                     found_for_book = True
@@ -378,14 +403,16 @@ def build_pdf_cache(base_folder: str, target_books: list = None) -> dict:
                     if filename.lower().endswith('.pdf'):
                         pdf_path = os.path.join(root, filename)
                         name_without_ext = os.path.splitext(filename)[0]
-                        
-                        pdf_cache[filename] = pdf_path
-                        pdf_cache[name_without_ext] = pdf_path
-                        
+
+                        # 规范化键写入
+                        pdf_cache[_normalize_key(filename)] = pdf_path
+                        pdf_cache[_normalize_key(name_without_ext)] = pdf_path
+
                         if '_' in name_without_ext:
                             main_part = name_without_ext.split('_')[0]
-                            if main_part not in pdf_cache:
-                                pdf_cache[main_part] = pdf_path
+                            norm_main = _normalize_key(main_part)
+                            if norm_main not in pdf_cache:
+                                pdf_cache[norm_main] = pdf_path
                         
                         pdf_count += 1
                         pbar.set_description(f"📁 扫描: {current_dir[:20]}... (找到 {pdf_count} PDF)")
@@ -716,6 +743,18 @@ def batch_process_books(
         
         logger.info(f"JSON验证完成，{len(valid_books)} 本书籍准备处理")
         
+        # 在处理前构建或更新一次性PDF缓存（针对待处理书籍，可快速命中）
+        try:
+            logger.info("构建PDF文件缓存（一次性）...")
+            # 优先用待处理书籍列表作为目标，以加速缓存构建
+            cache = build_pdf_cache(pdf_base_folder, target_books=pending_books)
+            # 若命中率较低，build_pdf_cache 会自动做全量扫描
+            global PDF_CACHE
+            PDF_CACHE = cache
+            logger.info(f"PDF缓存条目数: {len(PDF_CACHE)}")
+        except Exception as e:
+            logger.warning(f"构建PDF缓存失败，后续将回退逐本查找: {e}")
+
         # 创建任务
         book_tasks = []
         for book_name, json_file_path in valid_books:
