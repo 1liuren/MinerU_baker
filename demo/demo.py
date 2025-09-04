@@ -233,9 +233,14 @@ def parse_doc(
 if __name__ == '__main__':
     # args
     __dir__ = os.path.dirname(os.path.abspath(__file__))
+<<<<<<< Updated upstream
     # pdf_files_dir = os.path.join(__dir__, "pdfs")
     pdf_files_dir = os.path.join(__dir__, "../data/0818_table")
     output_dir = os.path.join(__dir__, "0818_output")
+=======
+    pdf_files_dir = os.path.join(__dir__, "0807_table/")
+    output_dir = os.path.join(__dir__, "0807_table_output")
+>>>>>>> Stashed changes
     pdf_suffixes = [".pdf"]
     image_suffixes = [".png", ".jpeg", ".jpg"]
 
@@ -254,7 +259,11 @@ if __name__ == '__main__':
     # parse_doc(doc_path_list, output_dir, backend="vlm-transformers")  # more general.
     # parse_doc(doc_path_list, output_dir, backend="vlm-sglang-engine")  # faster(engine).
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     parse_doc(doc_path_list, output_dir, backend="vlm-sglang-client", server_url="http://10.10.50.50:30001")  # faster(client).
 =======
     parse_doc(doc_path_list, output_dir, backend="vlm-sglang-client", server_url="http://10.10.50.50:30000")  # faster(client).
+>>>>>>> Stashed changes
+=======
+    parse_doc(doc_path_list, output_dir, backend="vlm-sglang-client", server_url="http://10.10.50.50:30001")  # faster(client).
 >>>>>>> Stashed changes
