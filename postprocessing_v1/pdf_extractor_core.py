@@ -177,50 +177,104 @@ def _stem_key(name: str) -> str:
 
 def extract_targets_from_json(json_data: Dict) -> List[TargetInfo]:
     """从JSON数据中提取目标信息"""
-    targets = []
+    targets: List[TargetInfo] = []
     target_types = get_target_types()
-    
+
+    # 每页每类型的递增计数，当中间JSON缺少 index 时回退使用
+    page_type_counters: dict[tuple[int, str], int] = {}
+
     try:
         if 'pdf_info' in json_data:
             pdf_info = json_data['pdf_info']
-            
+
             for page_idx, page_data in enumerate(pdf_info):
-                if 'para_blocks' in page_data:
-                    for block in page_data['para_blocks']:
-                        # 处理嵌套结构
-                        lines_list = []
-                        if 'blocks' in block:
-                            for nested_block in block['blocks']:
-                                if 'lines' in nested_block:
-                                    lines_list.extend(nested_block['lines'])
-                        elif 'lines' in block:
-                            lines_list = block['lines']
-                        
-                        # 处理lines中的spans
-                        for line in lines_list:
-                            if 'spans' in line:
-                                for span_idx, span in enumerate(line['spans']):
-                                    if 'bbox' in span and 'type' in span:
-                                        span_type = span.get('type', '')
-                                        if span_type in target_types:
-                                            # 根据类型选择不同的文本字段
-                                            if span_type == 'table':
-                                                text_content = span.get('html', '')
-                                            else:
-                                                text_content = span.get('content', '')
-                                            
-                                            target = TargetInfo(
-                                                id=f"page_{page_idx}_span_{span_type}_{span_idx}",
-                                                type=f"span_{span_type}",
-                                                text=text_content,
-                                                bbox=span['bbox'],
-                                                page_idx=page_idx
-                                            )
-                                            targets.append(target)
-        
+                if 'para_blocks' not in page_data:
+                    continue
+
+                for block in page_data['para_blocks']:
+                    # 处理两种结构：block 内直接含 lines，或含 blocks[nested] 再含 lines
+                    if 'blocks' in block and isinstance(block['blocks'], list):
+                        for nested_block in block['blocks']:
+                            lines_list = nested_block.get('lines', []) if isinstance(nested_block, dict) else []
+                            block_index = nested_block.get('index') if isinstance(nested_block, dict) else None
+
+                            for line in lines_list or []:
+                                spans = line.get('spans') if isinstance(line, dict) else None
+                                if not spans:
+                                    continue
+                                for span in spans:
+                                    if not isinstance(span, dict):
+                                        continue
+                                    if 'bbox' not in span or 'type' not in span:
+                                        continue
+                                    span_type = span.get('type', '')
+                                    if span_type not in target_types:
+                                        continue
+
+                                    # 文本字段：table 使用 html，其它使用 content
+                                    text_content = span.get('html', '') if span_type == 'table' else span.get('content', '')
+
+                                    # 使用 span.index > block.index > fallback (每页/类型自增)
+                                    raw_span_idx = span.get('index', None)
+                                    if isinstance(raw_span_idx, int):
+                                        suffix = raw_span_idx
+                                    elif isinstance(block_index, int):
+                                        suffix = block_index
+                                    else:
+                                        key = (page_idx, span_type)
+                                        suffix = page_type_counters.get(key, 0)
+                                        page_type_counters[key] = suffix + 1
+
+                                    target = TargetInfo(
+                                        id=f"page_{page_idx}_span_{span_type}_{suffix}",
+                                        type=f"span_{span_type}",
+                                        text=text_content,
+                                        bbox=span['bbox'],
+                                        page_idx=page_idx,
+                                    )
+                                    targets.append(target)
+
+                    else:
+                        lines_list = block.get('lines', []) if isinstance(block, dict) else []
+                        block_index = block.get('index') if isinstance(block, dict) else None
+
+                        for line in lines_list or []:
+                            spans = line.get('spans') if isinstance(line, dict) else None
+                            if not spans:
+                                continue
+                            for span in spans:
+                                if not isinstance(span, dict):
+                                    continue
+                                if 'bbox' not in span or 'type' not in span:
+                                    continue
+                                span_type = span.get('type', '')
+                                if span_type not in target_types:
+                                    continue
+
+                                text_content = span.get('html', '') if span_type == 'table' else span.get('content', '')
+
+                                raw_span_idx = span.get('index', None)
+                                if isinstance(raw_span_idx, int):
+                                    suffix = raw_span_idx
+                                elif isinstance(block_index, int):
+                                    suffix = block_index
+                                else:
+                                    key = (page_idx, span_type)
+                                    suffix = page_type_counters.get(key, 0)
+                                    page_type_counters[key] = suffix + 1
+
+                                target = TargetInfo(
+                                    id=f"page_{page_idx}_span_{span_type}_{suffix}",
+                                    type=f"span_{span_type}",
+                                    text=text_content,
+                                    bbox=span['bbox'],
+                                    page_idx=page_idx,
+                                )
+                                targets.append(target)
+
         logger.info(f"从JSON中提取了 {len(targets)} 个目标")
         return targets
-        
+
     except Exception as e:
         logger.error(f"提取目标信息失败: {e}")
         return []
