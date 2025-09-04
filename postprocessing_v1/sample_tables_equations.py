@@ -4,9 +4,10 @@ import os
 import random
 import shutil
 import time
-from scripts.html_converter import HTMLToMarkdownConverter  # type: ignore
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from loguru import logger
 
 
 def parse_args() -> argparse.Namespace:
@@ -226,13 +227,28 @@ def main() -> None:
     written_tables: List[Dict[str, Any]] = []
     written_equations: List[Dict[str, Any]] = []
 
-    converter: Optional[HTMLToMarkdownConverter] = None
+    converter: Optional[Any] = None
     if args.table_to_md:
         try:
-            converter = HTMLToMarkdownConverter()
+            from scripts.html_converter import HTMLToMarkdownConverter  # type: ignore
+        except ModuleNotFoundError:
+            repo_root = Path(__file__).resolve().parents[1]
+            sys.path.insert(0, str(repo_root))
+            try:
+                from scripts.html_converter import HTMLToMarkdownConverter  # type: ignore
+            except Exception:
+                logger.error("HTMLToMarkdownConverter 导入失败")
+                HTMLToMarkdownConverter = None  # type: ignore
         except Exception:
-            logger.error("HTMLToMarkdownConverter 初始化失败")
-            converter = None
+            logger.error("HTMLToMarkdownConverter 导入异常")
+            HTMLToMarkdownConverter = None  # type: ignore
+
+        if 'HTMLToMarkdownConverter' in locals() and HTMLToMarkdownConverter is not None:
+            try:
+                converter = HTMLToMarkdownConverter()
+            except Exception:
+                logger.error("HTMLToMarkdownConverter 初始化失败")
+                converter = None
 
     copied_table = 0
     for idx, item in enumerate(sampled_tables_items):
