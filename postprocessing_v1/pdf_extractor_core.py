@@ -72,6 +72,7 @@ class BookTask:
     output_dir: str
     task_id: str
     pdf_base_folder: Optional[str] = None
+    include_text: bool = False
 
 @dataclass
 class TargetInfo:
@@ -183,10 +184,13 @@ def _stem_key(name: str) -> str:
 
 
 
-def extract_targets_from_json(json_data: Dict) -> List[TargetInfo]:
+def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> List[TargetInfo]:
     """从JSON数据中提取目标信息"""
     targets: List[TargetInfo] = []
     target_types = get_target_types()
+    # 可选启用 text 类型
+    if include_text:
+        target_types = set(target_types) | {"text"}
 
     # 每页每类型的递增计数，当中间JSON缺少 index 时回退使用
     page_type_counters: dict[tuple[int, str], int] = {}
@@ -259,6 +263,7 @@ def extract_targets_from_json(json_data: Dict) -> List[TargetInfo]:
                                 if span_type not in target_types:
                                     continue
 
+                                text_content = span.get('html', '') if span_type == 'table' else span.get('content', '')
                                 text_content = span.get('html', '') if span_type == 'table' else span.get('content', '')
 
                                 raw_span_idx = span.get('index', None)
@@ -421,7 +426,7 @@ def get_processed_books_from_filesystem(output_base_dir: str) -> set:
     return processed_books
 
 
-def process_pdf_extraction(json_path: str, pdf_path: Optional[str] = None, output_dir: Optional[str] = None) -> ProcessResult:
+def process_pdf_extraction(json_path: str, pdf_path: Optional[str] = None, output_dir: Optional[str] = None, include_text: bool = False) -> ProcessResult:
     """处理PDF图像截取"""
     try:
         # 解析JSON文件
@@ -466,7 +471,7 @@ def process_pdf_extraction(json_path: str, pdf_path: Optional[str] = None, outpu
             shutil.copy2(json_path, json_copy_path)
         
         # 提取目标信息
-        targets = extract_targets_from_json(json_data)
+        targets = extract_targets_from_json(json_data, include_text=include_text)
         
         if not targets:
             return ProcessResult(
@@ -579,7 +584,8 @@ def process_single_book_worker(book_task: BookTask) -> Dict:
         result = process_pdf_extraction(
             book_task.json_file_path,
             pdf_path,
-            book_task.output_dir
+            book_task.output_dir,
+            include_text=book_task.include_text,
         )
         
         # 计算处理时间
@@ -619,6 +625,7 @@ def batch_process_books(
     pdf_base_folder: str, 
     output_base_dir: Optional[str] = None,
     max_workers: Optional[int] = None,
+    include_text: bool = False,
 ) -> BatchResult:
     """批量处理PDF图像截取（简化版）"""
     try:
@@ -709,7 +716,8 @@ def batch_process_books(
                 pdf_path=None,
                 output_dir=output_base_dir,
                 task_id="batch_task",
-                pdf_base_folder=pdf_base_folder
+                pdf_base_folder=pdf_base_folder,
+                include_text=include_text,
             )
             book_tasks.append(book_task)
         
@@ -879,6 +887,7 @@ if __name__ == "__main__":
     parser.add_argument("--pdf-base-folder", required=True, help="PDF搜索基础目录")
     parser.add_argument("--output-base-dir", help="输出基础目录")
     parser.add_argument("--max-workers", type=int, default=0, help="并发进程数（默认0表示自动）")
+    parser.add_argument("--include-text", action="store_true", help="是否同时提取普通文本(text)目标")
     
     args = parser.parse_args()
     
@@ -895,6 +904,7 @@ if __name__ == "__main__":
             pdf_base_folder=args.pdf_base_folder,
             output_base_dir=args.output_base_dir,
             max_workers=args.max_workers,
+            include_text=args.include_text,
         )
         
         # 显示结果

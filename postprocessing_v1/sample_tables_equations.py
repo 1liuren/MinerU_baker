@@ -13,8 +13,9 @@ from loguru import logger
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "递归扫描输入目录内所有 extraction_results.json，统计 span_table 与 "
-            "span_interline_equation 数量，按比例抽样，复制图片到输出目录，并生成 table.json / equation.json。"
+            "递归扫描输入目录内所有 extraction_results.json，统计 span_table / "
+            "span_interline_equation（可选 span_text）数量，按比例抽样，复制图片到输出目录，"
+            "并生成 table.json / equation.json（可选 text.json）。"
         )
     )
     parser.add_argument(
@@ -53,6 +54,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="是否将表格 text 从 HTML 转为 Markdown",
     )
+    parser.add_argument(
+        "--include_text",
+        action="store_true",
+        help="是否处理 span_text（普通文本）并输出 text.json 与 text_images",
+    )
     return parser.parse_args()
 
 
@@ -65,40 +71,46 @@ def find_json_files(root: Path) -> List[Path]:
     return results
 
 
-def is_target_type(item: Dict[str, Any]) -> bool:
+def is_target_type(item: Dict[str, Any], include_text: bool = False) -> bool:
     t = item.get("type")
-    return t in {"span_table", "span_interline_equation"}
+    base = {"span_table", "span_interline_equation"}
+    if include_text:
+        base.add("span_text")
+    return t in base
 
 
-def collect_targets(json_path: Path, verbose: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def collect_targets(json_path: Path, include_text: bool = False, verbose: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
         with json_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:  # noqa: BLE001
         if verbose:
             print(f"[WARN] 读取失败: {json_path} -> {e}")
-        return [], []
+        return [], [], []
 
     targets = data.get("targets", [])
     if not isinstance(targets, list):
         if verbose:
             print(f"[WARN] 文件结构异常(缺少 targets 列表): {json_path}")
-        return [], []
+        return [], [], []
 
     tables: List[Dict[str, Any]] = []
     equations: List[Dict[str, Any]] = []
+    texts: List[Dict[str, Any]] = []
 
     for item in targets:
         if not isinstance(item, Dict):
             continue
-        if not is_target_type(item):
+        if not is_target_type(item, include_text=include_text):
             continue
         if item.get("type") == "span_table":
             tables.append(item)
         elif item.get("type") == "span_interline_equation":
             equations.append(item)
+        elif include_text and item.get("type") == "span_text":
+            texts.append(item)
 
-    return tables, equations
+    return tables, equations, texts
 
 
 def resolve_image_path(item: Dict[str, Any], json_path: Path, verbose: bool = False) -> Optional[Path]:
@@ -187,9 +199,12 @@ def main() -> None:
 
     table_img_dir = output_root / "table_images"
     eq_img_dir = output_root / "equation_images"
+    text_img_dir = output_root / "text_images"
 
     ensure_dir(table_img_dir)
     ensure_dir(eq_img_dir)
+    if args.include_text:
+        ensure_dir(text_img_dir)
 
     json_files = find_json_files(input_root)
     if args.verbose:
@@ -197,35 +212,51 @@ def main() -> None:
 
     all_tables: List[Tuple[Path, Dict[str, Any]]] = []  # (json_path, item)
     all_equations: List[Tuple[Path, Dict[str, Any]]] = []
+    all_texts: List[Tuple[Path, Dict[str, Any]]] = []
 
     for jp in json_files:
-        tables, equations = collect_targets(jp, verbose=args.verbose)
+        tables, equations, texts = collect_targets(jp, include_text=args.include_text, verbose=args.verbose)
         all_tables.extend((jp, it) for it in tables)
         all_equations.extend((jp, it) for it in equations)
+        if args.include_text:
+            all_texts.extend((jp, it) for it in texts)
 
     total_tables = len(all_tables)
     total_equations = len(all_equations)
+    total_texts = len(all_texts) if args.include_text else 0
 
     print(f"总表格(span_table): {total_tables}")
     print(f"总公式(span_interline_equation): {total_equations}")
+    if args.include_text:
+        print(f"总文本(span_text): {total_texts}")
 
     sampled_tables_items = sample_items([it for _, it in all_tables], args.ratio)
     sampled_equations_items = sample_items([it for _, it in all_equations], args.ratio)
+    sampled_text_items: List[Dict[str, Any]] = []
+    if args.include_text:
+        sampled_text_items = sample_items([it for _, it in all_texts], args.ratio)
 
     print(f"抽样表格: {len(sampled_tables_items)}")
     print(f"抽样公式: {len(sampled_equations_items)}")
+    if args.include_text:
+        print(f"抽样文本: {len(sampled_text_items)}")
 
     # 建立 item -> json_path 的映射，便于解析图片路径
     table_path_map: Dict[int, Path] = {}
     eq_path_map: Dict[int, Path] = {}
+    text_path_map: Dict[int, Path] = {}
     for jp, it in all_tables:
         table_path_map[id(it)] = jp
     for jp, it in all_equations:
         eq_path_map[id(it)] = jp
+    if args.include_text:
+        for jp, it in all_texts:
+            text_path_map[id(it)] = jp
 
     # 执行复制与改写
     written_tables: List[Dict[str, Any]] = []
     written_equations: List[Dict[str, Any]] = []
+    written_texts: List[Dict[str, Any]] = []
 
     converter: Optional[Any] = None
     if args.table_to_md:
@@ -276,9 +307,20 @@ def main() -> None:
         written_equations.append(new_item)
         copied_equation += 1
 
+    copied_text = 0
+    if args.include_text:
+        for idx, item in enumerate(sampled_text_items):
+            src = resolve_image_path(item, text_path_map.get(id(item), input_root), verbose=args.verbose)
+            if src is None:
+                continue
+            new_item, _ = copy_and_rewrite(item, src, text_img_dir, prefix="text", index=idx)
+            written_texts.append(new_item)
+            copied_text += 1
+
     # 写出 JSON，保持与示例一致的外层结构；仅更新 targets 与计数
     table_json_path = output_root / "table.json"
     equation_json_path = output_root / "equation.json"
+    text_json_path = output_root / "text.json" if args.include_text else None
 
     now_ts = str(time.time())
 
@@ -298,15 +340,33 @@ def main() -> None:
         "processed_targets": len(written_equations),
         "targets": written_equations,
     }
+    text_payload = None
+    if args.include_text:
+        text_payload = {
+            "pdf_path": "",
+            "json_source": "",
+            "extraction_time": now_ts,
+            "total_targets": len(written_texts),
+            "processed_targets": len(written_texts),
+            "targets": written_texts,
+        }
 
     with table_json_path.open("w", encoding="utf-8") as f:
         json.dump(table_payload, f, ensure_ascii=False, indent=2)
     with equation_json_path.open("w", encoding="utf-8") as f:
         json.dump(equation_payload, f, ensure_ascii=False, indent=2)
+    if args.include_text and text_json_path is not None and text_payload is not None:
+        with text_json_path.open("w", encoding="utf-8") as f:
+            json.dump(text_payload, f, ensure_ascii=False, indent=2)
 
     print(f"已写出: {table_json_path} ({len(written_tables)} 项)")
     print(f"已写出: {equation_json_path} ({len(written_equations)} 项)")
-    print(f"图片输出目录: {table_img_dir} / {eq_img_dir}")
+    if args.include_text and text_json_path is not None:
+        print(f"已写出: {text_json_path} ({len(written_texts)} 项)")
+    if args.include_text:
+        print(f"图片输出目录: {table_img_dir} / {eq_img_dir} / {text_img_dir}")
+    else:
+        print(f"图片输出目录: {table_img_dir} / {eq_img_dir}")
 
 
 if __name__ == "__main__":
