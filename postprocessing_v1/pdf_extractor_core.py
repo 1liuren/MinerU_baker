@@ -24,6 +24,14 @@ import multiprocessing
 import threading
 from tqdm import tqdm
 
+import sys
+
+# 移除默认的 sink，防止重复
+logger.remove()
+
+# 重新把终端 sink 加回来，并设定等级
+logger.add(sys.stderr, level="INFO") 
+
 """使用 tqdm 默认实现作为进度条"""
 
 # 全局配置
