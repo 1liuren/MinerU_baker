@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--include_text",
         action="store_true",
-        help="是否处理 span_text（普通文本）并输出 text.json 与 text_images",
+        help="是否处理 title_text（标题文本）和 text（普通文本）并输出 text.json 与 text_images",
     )
     return parser.parse_args()
 
@@ -75,7 +75,8 @@ def is_target_type(item: Dict[str, Any], include_text: bool = False) -> bool:
     t = item.get("type")
     base = {"span_table", "span_interline_equation"}
     if include_text:
-        base.add("span_text")
+        base.add("title_text")
+        base.add("text")
     return t in base
 
 
@@ -107,7 +108,7 @@ def collect_targets(json_path: Path, include_text: bool = False, verbose: bool =
             tables.append(item)
         elif item.get("type") == "span_interline_equation":
             equations.append(item)
-        elif include_text and item.get("type") == "span_text":
+        elif include_text and item.get("type") in ("title_text", "text"):
             texts.append(item)
 
     return tables, equations, texts
