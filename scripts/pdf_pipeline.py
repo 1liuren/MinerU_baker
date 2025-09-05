@@ -239,12 +239,12 @@ def process_batch_worker(batch_data):
                     try:
                         with open(md_file, 'r', encoding='utf-8') as f:
                             content = f.read()
-                        try:
-                            converter = HTMLToMarkdownConverter()
-                            content = converter.convert_html_in_text(content)
-                            logger.success(f"HTMLToMarkdownConverter success")
-                        except Exception as e:
-                            logger.error(f"HTMLToMarkdownConverter failed: {e}")
+                        # try:
+                        #     converter = HTMLToMarkdownConverter()
+                        #     content = converter.convert_html_in_text(content)
+                        #     logger.success(f"HTMLToMarkdownConverter success")
+                        # except Exception as e:
+                        #     logger.error(f"HTMLToMarkdownConverter failed: {e}")
                         from .utils import clean_markdown_text
                         cleaned_content = clean_markdown_text(content)
                         with open(final_dir / f"{pdf_file.stem}.md", 'w', encoding='utf-8') as f:

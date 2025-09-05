@@ -209,81 +209,123 @@ def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> Li
                         for nested_block in block['blocks']:
                             lines_list = nested_block.get('lines', []) if isinstance(nested_block, dict) else []
                             block_index = nested_block.get('index') if isinstance(nested_block, dict) else None
+                            block_type = nested_block.get('type') if isinstance(nested_block, dict) else None
 
-                            for line in lines_list or []:
+                            for line_idx, line in enumerate(lines_list or []):
                                 spans = line.get('spans') if isinstance(line, dict) else None
                                 if not spans:
                                     continue
-                                for span in spans:
-                                    if not isinstance(span, dict):
-                                        continue
-                                    if 'bbox' not in span or 'type' not in span:
-                                        continue
-                                    span_type = span.get('type', '')
-                                    if span_type not in target_types:
-                                        continue
 
-                                    # 文本字段：table 使用 html，其它使用 content
-                                    text_content = span.get('html', '') if span_type == 'table' else span.get('content', '')
+                                # 先输出表格（受 target_types 控制）
+                                for s_idx, s in enumerate(spans):
+                                    if not isinstance(s, dict):
+                                        continue
+                                    if s.get('type') == 'table' and 'bbox' in s and ('table' in target_types):
+                                        targets.append(
+                                            TargetInfo(
+                                                id=f"page_{page_idx}_span_table_{s_idx}",
+                                                type='span_table',
+                                                text=s.get('html', ''),
+                                                bbox=s['bbox'],
+                                                page_idx=page_idx,
+                                            )
+                                        )
 
-                                    # 使用 span.index > block.index > fallback (每页/类型自增)
-                                    raw_span_idx = span.get('index', None)
-                                    if isinstance(raw_span_idx, int):
-                                        suffix = raw_span_idx
-                                    elif isinstance(block_index, int):
-                                        suffix = block_index
-                                    else:
-                                        key = (page_idx, span_type)
-                                        suffix = page_type_counters.get(key, 0)
-                                        page_type_counters[key] = suffix + 1
-
-                                    target = TargetInfo(
-                                        id=f"page_{page_idx}_span_{span_type}_{suffix}",
-                                        type=f"span_{span_type}",
-                                        text=text_content,
-                                        bbox=span['bbox'],
-                                        page_idx=page_idx,
-                                    )
-                                    targets.append(target)
+                                # 行间公式（受 target_types 控制），单独输出，不参与合并
+                                for s_idx, s in enumerate(spans):
+                                    if not isinstance(s, dict):
+                                        continue
+                                    if s.get('type') == 'interline_equation' and 'bbox' in s and ('interline_equation' in target_types):
+                                        targets.append(
+                                            TargetInfo(
+                                                id=f"page_{page_idx}_span_interline_equation_{s_idx}",
+                                                type='span_interline_equation',
+                                                text=s.get('content', ''),
+                                                bbox=s['bbox'],
+                                                page_idx=page_idx,
+                                            )
+                                        )
 
                     else:
                         lines_list = block.get('lines', []) if isinstance(block, dict) else []
                         block_index = block.get('index') if isinstance(block, dict) else None
+                        block_type = block.get('type') if isinstance(block, dict) else None
 
-                        for line in lines_list or []:
+                        for line_idx, line in enumerate(lines_list or []):
                             spans = line.get('spans') if isinstance(line, dict) else None
                             if not spans:
                                 continue
-                            for span in spans:
-                                if not isinstance(span, dict):
-                                    continue
-                                if 'bbox' not in span or 'type' not in span:
-                                    continue
-                                span_type = span.get('type', '')
-                                if span_type not in target_types:
-                                    continue
 
-                                text_content = span.get('html', '') if span_type == 'table' else span.get('content', '')
-                                text_content = span.get('html', '') if span_type == 'table' else span.get('content', '')
+                            # 表格（受 target_types 控制）
+                            for s_idx, s in enumerate(spans):
+                                if not isinstance(s, dict):
+                                    continue
+                                if s.get('type') == 'table' and 'bbox' in s and ('table' in target_types):
+                                    targets.append(
+                                        TargetInfo(
+                                            id=f"page_{page_idx}_span_table_{s_idx}",
+                                            type='span_table',
+                                            text=s.get('html', ''),
+                                            bbox=s['bbox'],
+                                            page_idx=page_idx,
+                                        )
+                                    )
 
-                                raw_span_idx = span.get('index', None)
-                                if isinstance(raw_span_idx, int):
-                                    suffix = raw_span_idx
-                                elif isinstance(block_index, int):
-                                    suffix = block_index
-                                else:
-                                    key = (page_idx, span_type)
-                                    suffix = page_type_counters.get(key, 0)
-                                    page_type_counters[key] = suffix + 1
+                            # 行间公式（受 target_types 控制）
+                            for s_idx, s in enumerate(spans):
+                                if not isinstance(s, dict):
+                                    continue
+                                if s.get('type') == 'interline_equation' and 'bbox' in s and ('interline_equation' in target_types):
+                                    targets.append(
+                                        TargetInfo(
+                                            id=f"page_{page_idx}_span_interline_equation_{s_idx}",
+                                            type='span_interline_equation',
+                                            text=s.get('content', ''),
+                                            bbox=s['bbox'],
+                                            page_idx=page_idx,
+                                        )
+                                    )
 
-                                target = TargetInfo(
-                                    id=f"page_{page_idx}_span_{span_type}_{suffix}",
-                                    type=f"span_{span_type}",
-                                    text=text_content,
-                                    bbox=span['bbox'],
-                                    page_idx=page_idx,
-                                )
-                                targets.append(target)
+                            # 合并文本/行内公式（仅当启用 text 提取；标题由上层 block 类型控制）
+                            if 'text' in target_types:
+                                parts = []
+                                boxes = []
+                                is_title = (block_type == 'title')
+                                for s in spans:
+                                    if not isinstance(s, dict):
+                                        continue
+                                    st = s.get('type', '')
+                                    if st in ('text', 'inline_equation'):
+                                        content = s.get('content', '')
+                                        if st == 'inline_equation' and content:
+                                            content = f"${content}$"
+                                        if content:
+                                            parts.append(content)
+                                        if 'bbox' in s:
+                                            boxes.append(s['bbox'])
+
+                                if parts:
+                                    merged = ''.join(parts)
+                                    if boxes:
+                                        xs1 = [b[0] for b in boxes]
+                                        ys1 = [b[1] for b in boxes]
+                                        xs2 = [b[2] for b in boxes]
+                                        ys2 = [b[3] for b in boxes]
+                                        mbox = [min(xs1), min(ys1), max(xs2), max(ys2)]
+                                    else:
+                                        mbox = spans[0].get('bbox', [0, 0, 0, 0])
+
+                                    out_type = 'title_text' if is_title else 'text'
+                                    out_text = f"# {merged}" if is_title else merged
+                                    targets.append(
+                                        TargetInfo(
+                                            id=f"page_{page_idx}_line_text_{line_idx}",
+                                            type=out_type,
+                                            text=out_text,
+                                            bbox=mbox,
+                                            page_idx=page_idx,
+                                        )
+                                    )
 
         logger.info(f"从JSON中提取了 {len(targets)} 个目标")
         return targets
