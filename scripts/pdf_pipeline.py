@@ -230,6 +230,7 @@ def process_batch_worker(batch_data):
                 result_dir = temp_output_dir / file_name / parse_method
                 md_file = result_dir / f"{file_name}.md"
                 json_file = result_dir / f"{file_name}_middle.json"
+                images_dir = result_dir / "images"
                 
                 if md_file.exists() and json_file.exists():
                     # 直接落盘：清洗后写入最终 .md，同时中间 json 直接复制，避免将JSON大对象读入内存
@@ -257,6 +258,14 @@ def process_batch_worker(batch_data):
                             pass
                     # 复制 middle.json（不读入内存）
                     shutil.copy2(json_file, final_dir / f"{pdf_file.stem}_middle.json")
+                    
+                    # 复制图片目录（如果存在）
+                    final_images_dir = final_dir / "images"
+                    if final_images_dir.exists():
+                        shutil.rmtree(final_images_dir)
+                    shutil.copytree(images_dir, final_images_dir)
+                    logger.debug(f"已复制图片目录: {pdf_file.stem}")
+                    
                     
                     # 仅存储必要的路径信息，供后续并行提取元数据时按需读取文件
                     file_contents.append({
