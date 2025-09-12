@@ -223,7 +223,7 @@ def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> Li
                                     if s.get('type') == 'table' and 'bbox' in s and ('table' in target_types):
                                         targets.append(
                                             TargetInfo(
-                                                id=f"page_{page_idx}_span_table_{s.get('index', s_idx)}",
+                                                id=f"page_{page_idx}_span_table_{block_index}",
                                                 type='span_table',
                                                 text=s.get('html', ''),
                                                 bbox=s['bbox'],
@@ -238,7 +238,7 @@ def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> Li
                                     if s.get('type') == 'interline_equation' and 'bbox' in s and ('interline_equation' in target_types):
                                         targets.append(
                                             TargetInfo(
-                                                id=f"page_{page_idx}_span_interline_equation_{s.get('index', s_idx)}",
+                                                id=f"page_{page_idx}_span_interline_equation_{block_index}",
                                                 type='span_interline_equation',
                                                 text=s.get('content', ''),
                                                 bbox=s['bbox'],
@@ -263,7 +263,7 @@ def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> Li
                                 if s.get('type') == 'table' and 'bbox' in s and ('table' in target_types):
                                     targets.append(
                                         TargetInfo(
-                                            id=f"page_{page_idx}_span_table_{s.get('index', s_idx)}",
+                                            id=f"page_{page_idx}_span_table_{block_index}",
                                             type='span_table',
                                             text=s.get('html', ''),
                                             bbox=s['bbox'],
@@ -278,7 +278,7 @@ def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> Li
                                 if s.get('type') == 'interline_equation' and 'bbox' in s and ('interline_equation' in target_types):
                                     targets.append(
                                         TargetInfo(
-                                            id=f"page_{page_idx}_span_interline_equation_{s.get('index', s_idx)}",
+                                            id=f"page_{page_idx}_span_interline_equation_{block_index}",
                                             type='span_interline_equation',
                                             text=s.get('content', ''),
                                             bbox=s['bbox'],
@@ -319,7 +319,7 @@ def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> Li
                                     out_text = f"# {merged}" if is_title else merged
                                     targets.append(
                                         TargetInfo(
-                                            id=f"page_{page_idx}_line_text_{line_idx}",
+                                            id=f"page_{page_idx}_line_text_{block_index}",
                                             type=out_type,
                                             text=out_text,
                                             bbox=mbox,
@@ -430,15 +430,23 @@ def check_book_already_processed(book_name: str, output_base_dir: str) -> bool:
         if not os.path.exists(result_json_path):
             return False
         
-        images_dir = os.path.join(book_output_dir, "images")
-        if not os.path.exists(images_dir):
+        # 统计各分类目录下的 png
+        categories = [
+            os.path.join(book_output_dir, "table_images"),
+            os.path.join(book_output_dir, "equation_images"),
+            os.path.join(book_output_dir, "text_images"),
+            os.path.join(book_output_dir, "images"),  # 兼容旧结构/未知类型
+        ]
+        num_png = 0
+        for cat in categories:
+            if not os.path.exists(cat):
+                continue
+            for root, _, files in os.walk(cat):
+                num_png += sum(1 for f in files if f.lower().endswith('.png'))
+        if num_png == 0:
             return False
         
-        image_files = [f for f in os.listdir(images_dir) if f.endswith('.png')]
-        if not image_files:
-            return False
-        
-        logger.debug(f"书籍 {book_name} 已经处理过，有 {len(image_files)} 张图片")
+        logger.debug(f"书籍 {book_name} 已经处理过，有 {num_png} 张图片")
         return True
         
     except Exception as e:
@@ -529,15 +537,33 @@ def process_pdf_extraction(json_path: str, pdf_path: Optional[str] = None, outpu
         
         saved_images = []
         processed_count = 0
-        images_dir = os.path.join(book_output_dir, "images")
-        os.makedirs(images_dir, exist_ok=True)
+        # 分类子目录
+        table_dir = os.path.join(book_output_dir, "table_images")
+        equation_dir = os.path.join(book_output_dir, "equation_images") 
+        text_dir = os.path.join(book_output_dir, "text_images")
+        os.makedirs(table_dir, exist_ok=True)
+        os.makedirs(equation_dir, exist_ok=True)
+        os.makedirs(text_dir, exist_ok=True)
+        # id 到图片路径的映射
+        id_to_image_path: dict[str, str] = {}
         
         try:
             # 处理每个目标（不显示进度条，避免在多进程中混乱）
             for target in targets:
-                output_path = os.path.join(images_dir, f"{target.id}.png")
+                # 根据类型选择分类目录
+                if target.type == 'span_table':
+                    target_dir = table_dir
+                elif target.type == 'span_interline_equation':
+                    target_dir = equation_dir
+                elif target.type in ('text', 'title_text'):
+                    target_dir = text_dir
+                else:
+                    target_dir = os.path.join(book_output_dir, "images")
+
+                output_path = os.path.join(target_dir, f"{target.id}.png")
                 if extractor.extract_image_by_bbox(target.page_idx, target.bbox, output_path):
                     saved_images.append(output_path)
+                    id_to_image_path[target.id] = output_path
                     processed_count += 1
                     logger.debug(f"成功截取: {target.type}#{target.page_idx}")
                 else:
@@ -546,8 +572,11 @@ def process_pdf_extraction(json_path: str, pdf_path: Optional[str] = None, outpu
         finally:
             extractor.close()
         
-        # 保存结果JSON
-        result_json_path = os.path.join(book_output_dir, "extraction_results.json")
+        # 保存结果JSON（总汇总 + 按类型拆分）
+        # result_json_path = os.path.join(book_output_dir, "extraction_results.json")
+        table_json_path = os.path.join(book_output_dir, "table.json")
+        equation_json_path = os.path.join(book_output_dir, "equation.json")
+        text_json_path = os.path.join(book_output_dir, "text.json")
         try:
             result_data = {
                 "pdf_path": pdf_path,
@@ -559,20 +588,61 @@ def process_pdf_extraction(json_path: str, pdf_path: Optional[str] = None, outpu
             }
             
             for target in targets:
+                # 使用实际保存时记录的路径，若不存在则为空
+                img_path = id_to_image_path.get(target.id)
                 target_info = {
                     "id": target.id,
                     "type": target.type,
                     "text": target.text,
                     "bbox": target.bbox,
                     "page_idx": target.page_idx,
-                    "image_path": os.path.join(images_dir, f"{target.id}.png") if target.id in [Path(img).stem for img in saved_images] else None
+                    "image_path": img_path
                 }
                 result_data["targets"].append(target_info)
             
-            with open(result_json_path, 'w', encoding='utf-8') as f:
-                json.dump(result_data, f, ensure_ascii=False, indent=2)
-            
+            # with open(result_json_path, 'w', encoding='utf-8') as f:
+            #     json.dump(result_data, f, ensure_ascii=False, indent=2)
+
+            # 写出拆分后的 JSON
+            def _filter_targets(tt: str) -> list[dict]:
+                return [t for t in result_data["targets"] if t.get("type") == tt]
+
+            table_payload = {
+                "pdf_path": pdf_path,
+                "json_source": json_path,
+                "extraction_time": result_data["extraction_time"],
+                "total_targets": len(_filter_targets("span_table")),
+                "processed_targets": len(_filter_targets("span_table")),
+                "targets": _filter_targets("span_table"),
+            }
+            equation_payload = {
+                "pdf_path": pdf_path,
+                "json_source": json_path,
+                "extraction_time": result_data["extraction_time"],
+                "total_targets": len(_filter_targets("span_interline_equation")),
+                "processed_targets": len(_filter_targets("span_interline_equation")),
+                "targets": _filter_targets("span_interline_equation"),
+            }
+            text_targets = [t for t in result_data["targets"] if t.get("type") in ("text", "title_text")]
+            text_payload = {
+                "pdf_path": pdf_path,
+                "json_source": json_path,
+                "extraction_time": result_data["extraction_time"],
+                "total_targets": len(text_targets),
+                "processed_targets": len(text_targets),
+                "targets": text_targets,
+            }
+
+            with open(table_json_path, 'w', encoding='utf-8') as f:
+                json.dump(table_payload, f, ensure_ascii=False, indent=2)
+            with open(equation_json_path, 'w', encoding='utf-8') as f:
+                json.dump(equation_payload, f, ensure_ascii=False, indent=2)
+            if include_text and text_targets:
+                with open(text_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(text_payload, f, ensure_ascii=False, indent=2)
+
             logger.info(f"结果已保存到: {result_json_path}")
+            logger.info(f"拆分结果已保存到: {table_json_path}, {equation_json_path}{', ' + text_json_path if include_text and text_targets else ''}")
             
         except Exception as e:
             logger.warning(f"保存结果JSON失败: {e}")
@@ -766,14 +836,28 @@ def batch_process_books(
         # 为已处理的书籍创建结果记录
         all_results = []
         for book_name in processed_books:
+            # 统计分类目录下的图片数量
+            base_dir = os.path.join(output_base_dir, book_name)
+            cat_dirs = [
+                os.path.join(base_dir, "table_images"),
+                os.path.join(base_dir, "equation_images"),
+                os.path.join(base_dir, "text_images"),
+                os.path.join(base_dir, "images"),
+            ]
+            img_count = 0
+            for cat in cat_dirs:
+                if not os.path.exists(cat):
+                    continue
+                for _, _, files in os.walk(cat):
+                    img_count += sum(1 for f in files if f.lower().endswith('.png'))
+
             all_results.append({
                 "book_name": book_name,
                 "success": True,
                 "message": "智能恢复：跳过已处理文件",
                 "json_files_found": 1,
                 "targets_processed": 0,
-                "images_saved": len([f for f in os.listdir(os.path.join(output_base_dir, book_name, "images")) 
-                                   if f.endswith('.png')]) if os.path.exists(os.path.join(output_base_dir, book_name, "images")) else 0
+                "images_saved": img_count
             })
         
         if not book_tasks:

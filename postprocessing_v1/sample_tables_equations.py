@@ -64,9 +64,10 @@ def parse_args() -> argparse.Namespace:
 
 def find_json_files(root: Path) -> List[Path]:
     results: List[Path] = []
+    target_names = {"table.json", "equation.json", "text.json"}
     for dirpath, _, filenames in os.walk(root):
         for fn in filenames:
-            if fn == "extraction_results.json":
+            if fn in target_names:
                 results.append(Path(dirpath) / fn)
     return results
 
@@ -131,10 +132,12 @@ def resolve_image_path(item: Dict[str, Any], json_path: Path, verbose: bool = Fa
     candidates: List[Path] = []
     parent = json_path.parent
     candidates.append(parent / base)
-    candidates.append(parent / "images" / base)
+    # 新结构：按类型子目录分类
+    for sub in ("images", "table_images", "equation_images", "text_images"):
+        candidates.append(parent / sub / base)
 
     # 扩展：在 json 父目录内一层深度搜索 images 目录
-    for name in ("images", "image", "imgs"):  # 常见命名
+    for name in ("images", "image", "imgs", "table_images", "equation_images", "text_images"):  # 常见命名
         candidates.append(parent / name / base)
         candidates.append(parent.parent / name / base)
 
