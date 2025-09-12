@@ -223,7 +223,7 @@ def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> Li
                                     if s.get('type') == 'table' and 'bbox' in s and ('table' in target_types):
                                         targets.append(
                                             TargetInfo(
-                                                id=f"page_{page_idx}_span_table_{s_idx}",
+                                                id=f"page_{page_idx}_span_table_{s.get('index', s_idx)}",
                                                 type='span_table',
                                                 text=s.get('html', ''),
                                                 bbox=s['bbox'],
@@ -238,7 +238,7 @@ def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> Li
                                     if s.get('type') == 'interline_equation' and 'bbox' in s and ('interline_equation' in target_types):
                                         targets.append(
                                             TargetInfo(
-                                                id=f"page_{page_idx}_span_interline_equation_{s_idx}",
+                                                id=f"page_{page_idx}_span_interline_equation_{s.get('index', s_idx)}",
                                                 type='span_interline_equation',
                                                 text=s.get('content', ''),
                                                 bbox=s['bbox'],
@@ -263,7 +263,7 @@ def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> Li
                                 if s.get('type') == 'table' and 'bbox' in s and ('table' in target_types):
                                     targets.append(
                                         TargetInfo(
-                                            id=f"page_{page_idx}_span_table_{s_idx}",
+                                            id=f"page_{page_idx}_span_table_{s.get('index', s_idx)}",
                                             type='span_table',
                                             text=s.get('html', ''),
                                             bbox=s['bbox'],
@@ -278,7 +278,7 @@ def extract_targets_from_json(json_data: Dict, include_text: bool = False) -> Li
                                 if s.get('type') == 'interline_equation' and 'bbox' in s and ('interline_equation' in target_types):
                                     targets.append(
                                         TargetInfo(
-                                            id=f"page_{page_idx}_span_interline_equation_{s_idx}",
+                                            id=f"page_{page_idx}_span_interline_equation_{s.get('index', s_idx)}",
                                             type='span_interline_equation',
                                             text=s.get('content', ''),
                                             bbox=s['bbox'],
