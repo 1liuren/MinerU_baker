@@ -511,9 +511,9 @@ def process_pdf_extraction(json_path: str, pdf_path: Optional[str] = None, outpu
         os.makedirs(book_output_dir, exist_ok=True)
         
         # 复制文件到书籍目录
-        pdf_copy_path = os.path.join(book_output_dir, pdf_basename)
-        if not os.path.exists(pdf_copy_path):
-            shutil.copy2(pdf_path, pdf_copy_path)
+        #pdf_copy_path = os.path.join(book_output_dir, pdf_basename)
+        #if not os.path.exists(pdf_copy_path):
+        #    shutil.copy2(pdf_path, pdf_copy_path)
         
         json_basename = os.path.basename(json_path)
         json_copy_path = os.path.join(book_output_dir, json_basename)
