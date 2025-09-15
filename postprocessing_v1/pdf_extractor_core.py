@@ -426,16 +426,16 @@ def check_book_already_processed(book_name: str, output_base_dir: str) -> bool:
         if not os.path.exists(book_output_dir):
             return False
         
-        result_json_path = os.path.join(book_output_dir, "extraction_results.json")
-        if not os.path.exists(result_json_path):
-            return False
+        # result_json_path = os.path.join(book_output_dir, "extraction_results.json")
+        # if not os.path.exists(result_json_path):
+        #     return False
         
         # 统计各分类目录下的 png
         categories = [
             os.path.join(book_output_dir, "table_images"),
             os.path.join(book_output_dir, "equation_images"),
             os.path.join(book_output_dir, "text_images"),
-            os.path.join(book_output_dir, "images"),  # 兼容旧结构/未知类型
+            # os.path.join(book_output_dir, "images"),  # 兼容旧结构/未知类型
         ]
         num_png = 0
         for cat in categories:
@@ -641,7 +641,7 @@ def process_pdf_extraction(json_path: str, pdf_path: Optional[str] = None, outpu
                 with open(text_json_path, 'w', encoding='utf-8') as f:
                     json.dump(text_payload, f, ensure_ascii=False, indent=2)
 
-            logger.info(f"结果已保存到: {result_json_path}")
+            # logger.info(f"结果已保存到: {result_json_path}")
             logger.info(f"拆分结果已保存到: {table_json_path}, {equation_json_path}{', ' + text_json_path if include_text and text_targets else ''}")
             
         except Exception as e:
