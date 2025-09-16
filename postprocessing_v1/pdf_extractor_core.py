@@ -576,7 +576,8 @@ def process_pdf_extraction(json_path: str, pdf_path: Optional[str] = None, outpu
         # result_json_path = os.path.join(book_output_dir, "extraction_results.json")
         table_json_path = os.path.join(book_output_dir, "table.json")
         equation_json_path = os.path.join(book_output_dir, "equation.json")
-        text_json_path = os.path.join(book_output_dir, "text.json")
+        if include_text:
+            text_json_path = os.path.join(book_output_dir, "text.json")
         try:
             result_data = {
                 "pdf_path": pdf_path,

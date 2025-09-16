@@ -853,32 +853,32 @@ class OptimizedPDFPipeline:
                 return True
             
             # 生成JSONL文件
-            output_jsonl = self.results_dir / f"processed_books_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+            # output_jsonl = self.results_dir / f"processed_books_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
             
-            with open(output_jsonl, 'w', encoding='utf-8') as f:
-                for item in all_processed_data:
-                    jsonl_record = {
-                        "id": hashlib.sha256(item["content"].encode('utf-8')).hexdigest(),
-                        "text": item["metadata"].get("text", ""),
-                        "meta": {
-                            "data_info": {
-                                "lang": item["metadata"].get("lang", "zh"),
-                                "source": item["metadata"].get("publisher", ""),
-                                "type": item["metadata"].get("type", "书籍"),
-                                "book_name": item["metadata"].get("title", ""),
-                                "book_content": item["content"],
-                                "author": item["metadata"].get("author", ""),
-                                "processing_date": item["metadata"].get("processing_date", datetime.now().strftime("%Y-%m-%d"))
-                            },
-                            "knowledge_info": {
-                                "category": item["metadata"].get("category", []),
-                                "knowledge": item["metadata"].get("knowledge", [])
-                            }
-                        }
-                    }
-                    f.write(json.dumps(jsonl_record, ensure_ascii=False) + '\n')
+            # with open(output_jsonl, 'w', encoding='utf-8') as f:
+            #     for item in all_processed_data:
+            #         jsonl_record = {
+            #             "id": hashlib.sha256(item["content"].encode('utf-8')).hexdigest(),
+            #             "text": item["metadata"].get("text", ""),
+            #             "meta": {
+            #                 "data_info": {
+            #                     "lang": item["metadata"].get("lang", "zh"),
+            #                     "source": item["metadata"].get("publisher", ""),
+            #                     "type": item["metadata"].get("type", "书籍"),
+            #                     "book_name": item["metadata"].get("title", ""),
+            #                     "book_content": item["content"],
+            #                     "author": item["metadata"].get("author", ""),
+            #                     "processing_date": item["metadata"].get("processing_date", datetime.now().strftime("%Y-%m-%d"))
+            #                 },
+            #                 "knowledge_info": {
+            #                     "category": item["metadata"].get("category", []),
+            #                     "knowledge": item["metadata"].get("knowledge", [])
+            #                 }
+            #             }
+            #         }
+            #         f.write(json.dumps(jsonl_record, ensure_ascii=False) + '\n')
             
-            logger.success(f"JSONL文件生成完成: {output_jsonl}")
+            # logger.success(f"JSONL文件生成完成: {output_jsonl}")
             logger.info(f"包含历史所有处理过的 {len(all_processed_data)} 个PDF文件的数据")
             return True
             
