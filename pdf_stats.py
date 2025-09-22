@@ -56,16 +56,21 @@ def analyze_pdf_data(items):
             range_key = f"{((page_total-1)//100)*100+1}-{((page_total-1)//100+1)*100}"
             large_page_ranges[range_key] = large_page_ranges.get(range_key, 0) + 1
     
-    # 统计语言分布
+    # 统计语言分布与按语言合格数量
     language_counter = Counter()
+    qualified_language_counter = Counter()
     for item in items:
         file_path = item.get('file_path', '')
         if '/en/' in file_path:
-            language_counter['英文'] += 1
+            lang = '英文'
         elif '/zh/' in file_path:
-            language_counter['中文'] += 1
+            lang = '中文'
         else:
-            language_counter['未知'] += 1
+            lang = '未知'
+
+        language_counter[lang] += 1
+        if item.get('ok_status') == '合格':
+            qualified_language_counter[lang] += 1
     
     return {
         'total_pdfs': total_pdfs,
@@ -74,6 +79,7 @@ def analyze_pdf_data(items):
         'qualification_rate': qualification_rate,
         'error_types': dict(error_counter),
         'language_distribution': dict(language_counter),
+        'qualified_by_language': dict(qualified_language_counter),
         'page_distribution': {
             'normal': dict(page_ranges),
             'large': dict(sorted(large_page_ranges.items()))  # 按页数范围排序
@@ -117,6 +123,12 @@ def print_statistics(stats):
     for lang, count in stats['language_distribution'].items():
         percentage = (count / stats['total_pdfs'] * 100) if stats['total_pdfs'] > 0 else 0
         print(f"  {lang}: {count:,} ({percentage:.1f}%)")
+    
+    # 按语言合格数量
+    if 'qualified_by_language' in stats:
+        print(f"\n✅ 按语言合格数量:")
+        print(f"  中文合格: {stats['qualified_by_language'].get('中文', 0):,}")
+        print(f"  英文合格: {stats['qualified_by_language'].get('英文', 0):,}")
     
     if stats['error_types']:
         print(f"\n❌ 不合格原因统计:")
