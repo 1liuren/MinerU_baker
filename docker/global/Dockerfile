@@ -1,7 +1,9 @@
-# Use the official sglang image
-FROM lmsysorg/sglang:v0.4.9.post6-cu126
-# For blackwell GPU, use the following line instead:
-# FROM lmsysorg/sglang:v0.4.9.post6-cu128-b200
+# Use the official vllm image for gpu with Ampere architecture and above (Compute Capability>=8.0)
+# Compute Capability version query (https://developer.nvidia.com/cuda-gpus)
+FROM vllm/vllm-openai:v0.10.1.1
+
+# Use the official vllm image for gpu with Turing architecture and below (Compute Capability<8.0)
+# FROM vllm/vllm-openai:v0.10.2
 
 # Install libgl for opencv support & Noto fonts for Chinese characters
 RUN apt-get update && \
