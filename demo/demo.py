@@ -217,10 +217,10 @@ def parse_doc(
 if __name__ == '__main__':
     # args
     __dir__ = os.path.dirname(os.path.abspath(__file__))
-    pdf_files_dir = os.path.join(__dir__, "pdfs")
-    output_dir = os.path.join(__dir__, "output")
-    pdf_suffixes = ["pdf"]
-    image_suffixes = ["png", "jpeg", "jp2", "webp", "gif", "bmp", "jpg"]
+    pdf_files_dir = os.path.join(__dir__, "QandA/")
+    output_dir = os.path.join(__dir__, "QandA_output")
+    pdf_suffixes = [".pdf"]
+    image_suffixes = [".png", ".jpeg", ".jpg"]
 
     doc_path_list = []
     for doc_path in Path(pdf_files_dir).glob('*'):

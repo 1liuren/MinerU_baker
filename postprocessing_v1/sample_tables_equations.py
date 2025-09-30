@@ -90,20 +90,27 @@ def is_target_type(item: Dict[str, Any], include_text: bool = False) -> bool:
     return t in base
 
 
-def collect_targets(json_path: Path, include_text: bool = False, verbose: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+def collect_targets(
+    json_path: Path, include_text: bool = False, verbose: bool = False
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], str]:
+    pdf_path = ""
     try:
         with json_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:  # noqa: BLE001
         if verbose:
             print(f"[WARN] 读取失败: {json_path} -> {e}")
-        return [], [], []
+        return [], [], [], pdf_path
 
     targets = data.get("targets", [])
     if not isinstance(targets, list):
         if verbose:
             print(f"[WARN] 文件结构异常(缺少 targets 列表): {json_path}")
-        return [], [], []
+        return [], [], [], pdf_path
+
+    pdf_path_value = data.get("pdf_path")
+    if isinstance(pdf_path_value, str):
+        pdf_path = pdf_path_value
 
     tables: List[Dict[str, Any]] = []
     equations: List[Dict[str, Any]] = []
@@ -121,7 +128,7 @@ def collect_targets(json_path: Path, include_text: bool = False, verbose: bool =
         elif include_text and item.get("type") in ("title_text", "text"):
             texts.append(item)
 
-    return tables, equations, texts
+    return tables, equations, texts, pdf_path
 
 
 def resolve_image_path(item: Dict[str, Any], json_path: Path, verbose: bool = False) -> Optional[Path]:
@@ -284,6 +291,8 @@ def main() -> None:
     if args.include_text:
         ensure_dir(text_img_dir)
 
+    pdf_path_map: Dict[int, str] = {}
+
     # 批次模式
     if args.batch:
         batch_root = Path(args.batch).resolve()
@@ -312,22 +321,37 @@ def main() -> None:
                 # 表格
                 table_json = md5_dir / "table.json"
                 if table_json.exists():
-                    tbs, _, _ = collect_targets(table_json, include_text=False, verbose=args.verbose)
-                    batch_tables.extend((table_json, it) for it in tbs)
-                    all_tables.extend((table_json, it) for it in tbs)
+                    tbs, _, _, pdf_path = collect_targets(
+                        table_json, include_text=False, verbose=args.verbose
+                    )
+                    for it in tbs:
+                        batch_tables.append((table_json, it))
+                        all_tables.append((table_json, it))
+                        if pdf_path:
+                            pdf_path_map[id(it)] = pdf_path
                 # 公式
                 equation_json = md5_dir / "equation.json"
                 if equation_json.exists():
-                    _, eqs, _ = collect_targets(equation_json, include_text=False, verbose=args.verbose)
-                    batch_equations.extend((equation_json, it) for it in eqs)
-                    all_equations.extend((equation_json, it) for it in eqs)
+                    _, eqs, _, pdf_path = collect_targets(
+                        equation_json, include_text=False, verbose=args.verbose
+                    )
+                    for it in eqs:
+                        batch_equations.append((equation_json, it))
+                        all_equations.append((equation_json, it))
+                        if pdf_path:
+                            pdf_path_map[id(it)] = pdf_path
                 # 文本（可选）
                 if args.include_text:
                     text_json = md5_dir / "text.json"
                     if text_json.exists():
-                        _, _, txts = collect_targets(text_json, include_text=True, verbose=args.verbose)
-                        batch_texts.extend((text_json, it) for it in txts)
-                        all_texts.extend((text_json, it) for it in txts)
+                        _, _, txts, pdf_path = collect_targets(
+                            text_json, include_text=True, verbose=args.verbose
+                        )
+                        for it in txts:
+                            batch_texts.append((text_json, it))
+                            all_texts.append((text_json, it))
+                            if pdf_path:
+                                pdf_path_map[id(it)] = pdf_path
 
             # 按规则选取
             k_t = choose_k_for_batch(len(batch_tables), args.ratio)
@@ -371,24 +395,26 @@ def main() -> None:
         table_path_map: Dict[int, Path] = {}
         eq_path_map: Dict[int, Path] = {}
         text_path_map: Dict[int, Path] = {}
-        pdf_path_map: Dict[int, str] = {}
 
         for jp, it in sel_tables:
             table_path_map[id(it)] = jp
             md5 = jp.parent.name
             pdf_path = md5_to_info.get(md5, ("", ""))[0]
-            pdf_path_map[id(it)] = pdf_path
+            if pdf_path:
+                pdf_path_map.setdefault(id(it), pdf_path)
         for jp, it in sel_equations:
             eq_path_map[id(it)] = jp
             md5 = jp.parent.name
             pdf_path = md5_to_info.get(md5, ("", ""))[0]
-            pdf_path_map[id(it)] = pdf_path
+            if pdf_path:
+                pdf_path_map.setdefault(id(it), pdf_path)
         if args.include_text:
             for jp, it in sel_texts:
                 text_path_map[id(it)] = jp
                 md5 = jp.parent.name
                 pdf_path = md5_to_info.get(md5, ("", ""))[0]
-                pdf_path_map[id(it)] = pdf_path
+                if pdf_path:
+                    pdf_path_map.setdefault(id(it), pdf_path)
     else:
         # 原有（非批次）模式
         json_files = find_json_files(input_root)
@@ -400,11 +426,22 @@ def main() -> None:
         all_texts: List[Tuple[Path, Dict[str, Any]]] = []
 
         for jp in json_files:
-            tables, equations, texts = collect_targets(jp, include_text=args.include_text, verbose=args.verbose)
-            all_tables.extend((jp, it) for it in tables)
-            all_equations.extend((jp, it) for it in equations)
+            tables, equations, texts, pdf_path = collect_targets(
+                jp, include_text=args.include_text, verbose=args.verbose
+            )
+            for it in tables:
+                all_tables.append((jp, it))
+                if pdf_path:
+                    pdf_path_map[id(it)] = pdf_path
+            for it in equations:
+                all_equations.append((jp, it))
+                if pdf_path:
+                    pdf_path_map[id(it)] = pdf_path
             if args.include_text:
-                all_texts.extend((jp, it) for it in texts)
+                for it in texts:
+                    all_texts.append((jp, it))
+                    if pdf_path:
+                        pdf_path_map[id(it)] = pdf_path
 
         total_tables = len(all_tables)
         total_equations = len(all_equations)
@@ -437,7 +474,6 @@ def main() -> None:
         if args.include_text:
             for jp, it in all_texts:
                 text_path_map[id(it)] = jp
-        pdf_path_map: Dict[int, str] = {}
 
     # 执行复制与改写
     written_tables: List[Dict[str, Any]] = []
@@ -474,10 +510,9 @@ def main() -> None:
             continue
         new_item, _ = copy_and_rewrite(item, src, table_img_dir, prefix="table", index=idx)
         # 批次模式下补充 pdf_path
-        if args.batch:
-            pdf_path_value = locals().get("pdf_path_map", {}).get(id(item), "")
-            if pdf_path_value:
-                new_item["pdf_path"] = pdf_path_value
+        pdf_path_value = pdf_path_map.get(id(item), "")
+        if pdf_path_value:
+            new_item["pdf_path"] = pdf_path_value
         if converter is not None:
             text_value = new_item.get("text")
             if isinstance(text_value, str):
@@ -495,10 +530,9 @@ def main() -> None:
         if src is None:
             continue
         new_item, _ = copy_and_rewrite(item, src, eq_img_dir, prefix="equation", index=idx)
-        if args.batch:
-            pdf_path_value = locals().get("pdf_path_map", {}).get(id(item), "")
-            if pdf_path_value:
-                new_item["pdf_path"] = pdf_path_value
+        pdf_path_value = pdf_path_map.get(id(item), "")
+        if pdf_path_value:
+            new_item["pdf_path"] = pdf_path_value
         written_equations.append(new_item)
         copied_equation += 1
 
@@ -509,10 +543,9 @@ def main() -> None:
             if src is None:
                 continue
             new_item, _ = copy_and_rewrite(item, src, text_img_dir, prefix="text", index=idx)
-            if args.batch:
-                pdf_path_value = locals().get("pdf_path_map", {}).get(id(item), "")
-                if pdf_path_value:
-                    new_item["pdf_path"] = pdf_path_value
+            pdf_path_value = pdf_path_map.get(id(item), "")
+            if pdf_path_value:
+                new_item["pdf_path"] = pdf_path_value
             written_texts.append(new_item)
             copied_text += 1
 

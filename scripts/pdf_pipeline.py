@@ -105,15 +105,22 @@ def process_batch_worker(batch_data):
                 import httpx as _httpx
                 r = _httpx.get(f"{base_url}/metrics", timeout=timeout)
                 r.raise_for_status()
-                total = 0.0
-                prefix = "sglang:num_running_reqs{"
+                running_total = 0.0
+                waiting_total = 0.0
+                prefix_running = "vllm:num_requests_running{"
+                prefix_waiting = "vllm:num_requests_waiting{"
                 for ln in r.text.splitlines():
-                    if ln.startswith(prefix):
+                    if ln.startswith(prefix_running):
                         try:
-                            total += float(ln.rsplit(" ", 1)[-1])
+                            running_total += float(ln.rsplit(" ", 1)[-1])
                         except Exception:
                             pass
-                return int(total)
+                    elif ln.startswith(prefix_waiting):
+                        try:
+                            waiting_total += float(ln.rsplit(" ", 1)[-1])
+                        except Exception:
+                            pass
+                return int(running_total + waiting_total)
             except Exception:
                 return None
 
@@ -246,14 +253,14 @@ def process_batch_worker(batch_data):
                         #     logger.success(f"HTMLToMarkdownConverter success")
                         # except Exception as e:
                         #     logger.error(f"HTMLToMarkdownConverter failed: {e}")
-                        from .utils import clean_markdown_text
-                        cleaned_content = clean_markdown_text(content)
+                        # from .utils import clean_markdown_text
+                        # cleaned_content = clean_markdown_text(content)
                         with open(final_dir / f"{pdf_file.stem}.md", 'w', encoding='utf-8') as f:
-                            f.write(cleaned_content)
+                            f.write(content)
                     finally:
                         try:
                             del content
-                            del cleaned_content
+                            # del cleaned_content
                         except Exception:
                             pass
                     # 复制 middle.json（不读入内存）

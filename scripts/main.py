@@ -49,8 +49,8 @@ def parse_args():
     # 处理配置
     parser.add_argument(
         "--backend", 
-        default="vlm-sglang-client", 
-        choices=["vlm-sglang-client", "pipeline"],
+        default="vlm-http-client", 
+        choices=["vlm-sglang-client", "pipeline","vlm-http-client"],
         help="处理后端 (默认: vlm-sglang-client)"
     )
     parser.add_argument(
