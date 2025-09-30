@@ -112,14 +112,18 @@ def process_batch_worker(batch_data):
                 for ln in r.text.splitlines():
                     if ln.startswith(prefix_running):
                         try:
-                            running_total += float(ln.rsplit(" ", 1)[-1])
+                            value = float(ln.rsplit(" ", 1)[-1])
                         except Exception:
-                            pass
+                            continue
+                        if math.isfinite(value):
+                            running_total += value
                     elif ln.startswith(prefix_waiting):
                         try:
-                            waiting_total += float(ln.rsplit(" ", 1)[-1])
+                            value = float(ln.rsplit(" ", 1)[-1])
                         except Exception:
-                            pass
+                            continue
+                        if math.isfinite(value):
+                            waiting_total += value
                 return int(running_total + waiting_total)
             except Exception:
                 return None

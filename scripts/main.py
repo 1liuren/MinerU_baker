@@ -8,6 +8,8 @@ import argparse
 import sys
 from pathlib import Path
 from loguru import logger
+import warnings
+warnings.filterwarnings("ignore")
 
 # 支持直接执行和模块导入两种方式
 try:
