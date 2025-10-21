@@ -163,17 +163,6 @@ def resolve_image_path(item: Dict[str, Any], json_path: Path, verbose: bool = Fa
                 print(f"[INFO] 回退匹配图片: {raw_path} -> {cand}")
             return cand
 
-    # 最后尝试在 json 同级目录树中浅层次查找同名文件（限制深度以避免过慢）
-    try:
-        for dirpath, _, filenames in os.walk(parent):
-            if base.name in filenames:
-                hit = Path(dirpath) / base.name
-                if verbose:
-                    print(f"[INFO] 遍历匹配图片: {raw_path} -> {hit}")
-                return hit
-    except Exception:
-        pass
-
     if verbose:
         print(f"[WARN] 未找到图片: {raw_path} (来源: {json_path})")
     return None
@@ -514,7 +503,9 @@ def main() -> None:
         if pdf_path_value:
             new_item["pdf_path"] = pdf_path_value
         if converter is not None:
+            import html
             text_value = new_item.get("text")
+            text_value = html.unescape(text_value).replace('\\"', '"')
             if isinstance(text_value, str):
                 try:
                     new_item["text"] = converter.convert_html_table_to_markdown(text_value)

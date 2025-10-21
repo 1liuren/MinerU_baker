@@ -187,7 +187,7 @@ class IndividualJsonlGenerator:
             jsonl_record = self.create_jsonl_record(content, metadata)
 
             # 生成输出文件
-            output_file = self.output_dir / f"{pdf_name}.jsonl"
+            output_file = pdf_dir / f"{pdf_name}.jsonl"
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(json.dumps(jsonl_record, ensure_ascii=False) + '\n')
 
