@@ -503,15 +503,20 @@ def main() -> None:
         if pdf_path_value:
             new_item["pdf_path"] = pdf_path_value
         if converter is not None:
-            import html
+            # import html
             text_value = new_item.get("text")
-            text_value = html.unescape(text_value).replace('\\"', '"')
-            if isinstance(text_value, str):
-                try:
-                    new_item["text"] = converter.convert_html_table_to_markdown(text_value)
-                except Exception:
-                    logger.error("HTMLToMarkdownConverter 转换失败")
-                    pass
+            import pandas as pd
+            dfs = pd.read_html(text_value)
+            df = dfs[0]
+            df.columns = [""] * len(df.columns)
+            new_item["text"] = df.to_markdown(index=False)
+            # text_value = html.unescape(text_value).replace('\\"', '"')
+            # if isinstance(text_value, str):
+            #     try:
+            #         new_item["text"] = converter.convert_html_table_to_markdown(text_value)
+            #     except Exception:
+            #         logger.error("HTMLToMarkdownConverter 转换失败")
+            #         pass
         written_tables.append(new_item)
         copied_table += 1
 
