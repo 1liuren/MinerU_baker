@@ -505,11 +505,14 @@ def main() -> None:
         if converter is not None:
             # import html
             text_value = new_item.get("text")
-            import pandas as pd
-            dfs = pd.read_html(text_value)
-            df = dfs[0]
-            df.columns = [""] * len(df.columns)
-            new_item["text"] = df.to_markdown(index=False)
+            if args.table_to_md:
+                import pandas as pd
+                dfs = pd.read_html(text_value)
+                df = dfs[0]
+                df.columns = [""] * len(df.columns)
+                new_item["text"] = df.to_markdown(index=False)
+            else:
+                new_item["text"] = text_value
             # text_value = html.unescape(text_value).replace('\\"', '"')
             # if isinstance(text_value, str):
             #     try:
