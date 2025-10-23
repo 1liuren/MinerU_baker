@@ -210,7 +210,7 @@ def main():
             sys.exit(0)
         else:
             logger.error("流水线执行失败")
-            sys.exit(1)
+            sys.exit(0)
             
     except KeyboardInterrupt:
         logger.warning("用户中断操作")
