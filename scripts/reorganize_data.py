@@ -32,13 +32,25 @@ def load_file_path_mapping(data_json_path: str) -> Dict[str, str]:
     if path.is_file():
         json_files = [path]
     elif path.is_dir():
-        json_files = list(path.glob("*.json"))
+        # 递归查找所有JSON文件
+        json_files = list(path.rglob("*.json"))
+        if not json_files:
+            # 如果没找到，尝试非递归查找
+            json_files = list(path.glob("*.json"))
     else:
         logger.error(f"指定的路径不存在: {data_json_path}")
         return mapping
     
     if not json_files:
         logger.warning(f"未找到JSON文件: {data_json_path}")
+        logger.info(f"请检查路径是否正确，或该目录下是否包含JSON文件")
+        # 列出目录内容以帮助调试
+        if path.is_dir():
+            try:
+                files = list(path.iterdir())[:10]  # 只显示前10个
+                logger.info(f"目录 {path} 包含文件: {[f.name for f in files]}")
+            except Exception:
+                pass
         return mapping
     
     logger.info(f"找到 {len(json_files)} 个JSON文件,开始加载映射关系...")
@@ -46,7 +58,7 @@ def load_file_path_mapping(data_json_path: str) -> Dict[str, str]:
     total_records = 0
     qualified_records = 0
     
-    for json_file in json_files:
+    for json_file in tqdm(json_files, desc="加载JSON文件"):
         try:
             with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -259,12 +271,13 @@ def reorganize_results(
         "success": 0,
         "failed": 0,
         "pdf_found": 0,
-        "pdf_not_found": 0
+        "pdf_not_found": 0,
+        "skipped": 0
     }
     
     # 处理每个结果目录
     logger.info("步骤 3/3: 重组目录结构...")
-    for result_dir in tqdm(result_dirs, desc="处理进度"):
+    for result_dir in tqdm(result_dirs, desc="处理进度", unit="个"):
         dir_name = result_dir.name
         
         # 在映射中查找对应的file_path
@@ -284,6 +297,14 @@ def reorganize_results(
         
         # 创建目标目录
         target_dir = organized_path / category_path
+        
+        # 检查是否已处理(检查关键文件是否存在)
+        md_file_target = target_dir / f"{dir_name}.md"
+        metadata_file_target = target_dir / f"{dir_name}_extracted_metadata.json"
+        if md_file_target.exists() and metadata_file_target.exists():
+            stats["skipped"] += 1
+            logger.debug(f"跳过已处理: {dir_name}")
+            continue
         
         # 复制处理结果
         if copy_directory_contents(result_dir, target_dir, dir_name):
@@ -309,6 +330,7 @@ def reorganize_results(
     logger.info(f"  总目录数: {stats['total']}")
     logger.info(f"  匹配成功: {stats['matched']}")
     logger.info(f"  未匹配: {stats['unmatched']}")
+    logger.info(f"  跳过已处理: {stats['skipped']}")
     logger.info(f"  复制成功: {stats['success']}")
     logger.info(f"  复制失败: {stats['failed']}")
     logger.info(f"  PDF找到: {stats['pdf_found']}")
