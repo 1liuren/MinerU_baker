@@ -9,9 +9,11 @@ import shutil
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 from loguru import logger
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 
 def load_file_path_mapping(data_json_path: str) -> Dict[str, str]:
@@ -205,12 +207,90 @@ def find_original_pdf(input_dir: Path, file_path: str) -> Optional[Path]:
         return None
 
 
+def process_single_directory(
+    result_dir: Path,
+    mapping: Dict[str, str],
+    input_path: Path,
+    organized_path: Path,
+    levels: int,
+    stats_lock: threading.Lock
+) -> Tuple[str, Dict[str, int]]:
+    """
+    处理单个结果目录（线程工作函数）
+    
+    Returns:
+        (状态, 统计信息字典)
+    """
+    local_stats = {
+        "matched": 0,
+        "unmatched": 0,
+        "success": 0,
+        "failed": 0,
+        "pdf_found": 0,
+        "pdf_not_found": 0,
+        "skipped": 0
+    }
+    
+    dir_name = result_dir.name
+    
+    try:
+        # 在映射中查找对应的file_path
+        if dir_name not in mapping:
+            local_stats["unmatched"] += 1
+            return "unmatched", local_stats
+        
+        local_stats["matched"] += 1
+        file_path = mapping[dir_name]
+        
+        # 提取分类路径
+        category_path = extract_category_path(file_path, levels)
+        if not category_path:
+            local_stats["failed"] += 1
+            return "failed", local_stats
+        
+        # 创建目标目录
+        target_dir = organized_path / category_path
+        
+        # 检查是否已处理(检查关键文件是否存在)
+        md_file_target = target_dir / f"{dir_name}.md"
+        metadata_file_target = target_dir / f"{dir_name}_extracted_metadata.json"
+        if md_file_target.exists() and metadata_file_target.exists():
+            local_stats["skipped"] += 1
+            return "skipped", local_stats
+        
+        # 复制处理结果
+        if copy_directory_contents(result_dir, target_dir, dir_name):
+            local_stats["success"] += 1
+            
+            # 查找并复制原始PDF
+            original_pdf = find_original_pdf(input_path, file_path)
+            if original_pdf:
+                try:
+                    shutil.copy2(original_pdf, target_dir / original_pdf.name)
+                    local_stats["pdf_found"] += 1
+                except Exception as e:
+                    logger.debug(f"复制PDF失败 {original_pdf}: {e}")
+                    local_stats["pdf_not_found"] += 1
+            else:
+                local_stats["pdf_not_found"] += 1
+            return "success", local_stats
+        else:
+            local_stats["failed"] += 1
+            return "failed", local_stats
+            
+    except Exception as e:
+        logger.error(f"处理目录失败 {dir_name}: {e}")
+        local_stats["failed"] += 1
+        return "error", local_stats
+
+
 def reorganize_results(
     input_dir: str,
     output_dir: str,
     organized_output_dir: str,
     data_json_path: str,
-    levels: int = 4
+    levels: int = 4,
+    max_workers: int = 8
 ) -> bool:
     """
     重组处理结果目录结构
@@ -275,54 +355,44 @@ def reorganize_results(
         "skipped": 0
     }
     
-    # 处理每个结果目录
-    logger.info("步骤 3/3: 重组目录结构...")
-    for result_dir in tqdm(result_dirs, desc="处理进度", unit="个"):
-        dir_name = result_dir.name
+    stats_lock = threading.Lock()
+    
+    # 使用多线程处理
+    logger.info(f"步骤 3/3: 重组目录结构 (使用 {max_workers} 个线程)...")
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 提交所有任务
+        future_to_dir = {
+            executor.submit(
+                process_single_directory,
+                result_dir,
+                mapping,
+                input_path,
+                organized_path,
+                levels,
+                stats_lock
+            ): result_dir
+            for result_dir in result_dirs
+        }
         
-        # 在映射中查找对应的file_path
-        if dir_name not in mapping:
-            stats["unmatched"] += 1
-            logger.debug(f"未在映射中找到: {dir_name}")
-            continue
-        
-        stats["matched"] += 1
-        file_path = mapping[dir_name]
-        
-        # 提取分类路径
-        category_path = extract_category_path(file_path, levels)
-        if not category_path:
-            stats["failed"] += 1
-            continue
-        
-        # 创建目标目录
-        target_dir = organized_path / category_path
-        
-        # 检查是否已处理(检查关键文件是否存在)
-        md_file_target = target_dir / f"{dir_name}.md"
-        metadata_file_target = target_dir / f"{dir_name}_extracted_metadata.json"
-        if md_file_target.exists() and metadata_file_target.exists():
-            stats["skipped"] += 1
-            logger.debug(f"跳过已处理: {dir_name}")
-            continue
-        
-        # 复制处理结果
-        if copy_directory_contents(result_dir, target_dir, dir_name):
-            stats["success"] += 1
-            
-            # 查找并复制原始PDF
-            original_pdf = find_original_pdf(input_path, file_path)
-            if original_pdf:
+        # 使用tqdm显示进度
+        with tqdm(total=len(result_dirs), desc="处理进度", unit="个") as pbar:
+            for future in as_completed(future_to_dir):
+                result_dir = future_to_dir[future]
                 try:
-                    shutil.copy2(original_pdf, target_dir / original_pdf.name)
-                    stats["pdf_found"] += 1
+                    status, local_stats = future.result()
+                    
+                    # 合并统计信息
+                    with stats_lock:
+                        for key, value in local_stats.items():
+                            stats[key] += value
+                    
                 except Exception as e:
-                    logger.error(f"复制PDF失败 {original_pdf}: {e}")
-                    stats["pdf_not_found"] += 1
-            else:
-                stats["pdf_not_found"] += 1
-        else:
-            stats["failed"] += 1
+                    logger.error(f"处理失败 {result_dir.name}: {e}")
+                    with stats_lock:
+                        stats["failed"] += 1
+                
+                pbar.update(1)
     
     # 输出统计信息
     logger.info("=" * 60)
@@ -382,6 +452,12 @@ def parse_args():
         help="提取路径层级数(默认: 4)"
     )
     parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=8,
+        help="最大线程数(默认: 8)"
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -410,6 +486,7 @@ def main():
         logger.info(f"整理输出目录: {args.organized_output}")
         logger.info(f"数据JSON: {args.data_json}")
         logger.info(f"路径层级: {args.levels}")
+        logger.info(f"最大线程数: {args.max_workers}")
         
         # 执行重组
         success = reorganize_results(
@@ -417,7 +494,8 @@ def main():
             output_dir=args.output,
             organized_output_dir=args.organized_output,
             data_json_path=args.data_json,
-            levels=args.levels
+            levels=args.levels,
+            max_workers=args.max_workers
         )
         
         if success:
