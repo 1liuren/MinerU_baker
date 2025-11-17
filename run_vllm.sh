@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e  # 遇到错误立即退出
 
+# 禁用代理，避免内网请求通过代理导致连接问题
+export no_proxy="localhost,127.0.0.1,10.10.50.53,10.10.50.55,10.10.50.0/24"
+export NO_PROXY="localhost,127.0.0.1,10.10.50.53,10.10.50.55,10.10.50.0/24"
+# 如果需要完全禁用代理，可以取消下面两行的注释
+# unset http_proxy
+# unset https_proxy
+
 sudo -v
 # 每隔 5 分钟自动刷新一次 sudo 时效，直到脚本结束
 while true; do sudo -v; sleep 300; done &
